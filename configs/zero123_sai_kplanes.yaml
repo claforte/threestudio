@@ -63,7 +63,8 @@ system:
     pos_encoding_config:
       otype: KPlanes
       n_feature_count: 80
-      resolutions: [64, 128] #each entry N in this list creates 3 planes with resolution N x N. 
+      resolutions: [64, 128] #each entry N in this list creates K planes with resolution N x N. 
+      n_planes: 3 # 3D => 3, 4D => 4
     mlp_network_config:
       otype: "VanillaMLP"
       activation: "ReLU"

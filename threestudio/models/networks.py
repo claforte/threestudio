@@ -93,15 +93,15 @@ class KPlanesFeatureField(torch.nn.Module):
 
         hierarchical_list = []
         for resolution in config["resolutions"]: # e.g resolutions=[32,64,128]
-            plane_list = [KPlanesFeaturePlane(config["n_feature_count"], resolution=(resolution,resolution))] * 3
+            plane_list = [KPlanesFeaturePlane(config["n_feature_count"], resolution=(resolution,resolution))] * config["n_planes"]
             hierarchical_list.append(torch.nn.ModuleList(plane_list))
 
         self.planes = torch.nn.ModuleList(hierarchical_list)
         self.dropout = torch.nn.Dropout(0.)
         # pairs of coordinates that will be used to compute plane feature *in that order*
         # check the order if you want to have specific resolution for a given dimension (e.g. t in the paper)
-        self.dimension_pairs = list(itertools.combinations(range(3), 2))
-        self.feature_dim = config["n_feature_count"] * len(self.planes)
+        self.dimension_pairs = list(itertools.combinations(range(config["n_planes"]), 2))
+        self.feature_dim = config["n_feature_count"] * len(config["resolutions"])
 
         # mark the input dimensions (e.g., points in 3d space) and output feature size
         self.n_input_dims = n_input_dims # e.g. 3
@@ -111,7 +111,7 @@ class KPlanesFeatureField(torch.nn.Module):
             assert isinstance(plane_scale, torch.nn.ModuleList)
             assert len(plane_scale) == len(self.dimension_pairs)
 
-    def forward(self, x: Float[torch.Tensor, "*N 3"]) -> Float[torch.Tensor, "*N C"]:
+    def forward(self, x: Float[torch.Tensor, "*N D"]) -> Float[torch.Tensor, "*N C"]:
         features = []
         for plane_scale in self.planes:
             current_scale_features = 1.
