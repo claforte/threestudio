@@ -112,15 +112,14 @@ class ImplicitVolume(BaseImplicitGeometry):
         if output_normal and self.cfg.normal_type == "analytic":
             torch.set_grad_enabled(True)
             points.requires_grad_(True)
-        
-        
+
         points_unscaled = points  # points in the original scale
         points = contract_to_unisphere(
             points, self.bbox, self.unbounded
         )  # points normalized to (0, 1)
         
         if torch.is_grad_enabled():
-            points.requires_grad_(True)
+            points.requires_grad_(True) # without this, the encoding output does not require_grad
             enc = checkpoint(self.encoding, points.view(-1, self.cfg.n_input_dims), use_reentrant=True)
             density = checkpoint(self.density_network.layers, enc, use_reentrant=True).view(*points.shape[:-1], 1)
         else:
@@ -200,8 +199,9 @@ class ImplicitVolume(BaseImplicitGeometry):
                     normal = normal.detach()
             else:
                 raise AttributeError(f"Unknown normal type {self.cfg.normal_type}")
-
             output.update({"normal": normal, "shading_normal": normal})
+
+        torch.set_grad_enabled(grad_enabled)
         return output
 
     def forward_density(self, points: Float[Tensor, "*N Di"]) -> Float[Tensor, "*N 1"]:
