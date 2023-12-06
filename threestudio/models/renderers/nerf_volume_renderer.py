@@ -127,9 +127,21 @@ class NeRFVolumeRenderer(VolumeRenderer):
         **kwargs
     ) -> Dict[str, Float[Tensor, "..."]]:
         if rays_divisor > 1:
-            rays_o = torch.cat([rays_o[:, xx::rays_divisor, yy::rays_divisor, :] for (xx, yy) in zip(offset_x, offset_y)])
-            rays_d = torch.cat([rays_d[:, xx::rays_divisor, yy::rays_divisor, :] for (xx, yy) in zip(offset_x, offset_y)])
-            light_positions = light_positions.repeat(len(rays_o)//len(light_positions), 1)
+            rays_o = torch.cat(
+                [
+                    rays_o[:, xx::rays_divisor, yy::rays_divisor, :]
+                    for (xx, yy) in zip(offset_x, offset_y)
+                ]
+            )
+            rays_d = torch.cat(
+                [
+                    rays_d[:, xx::rays_divisor, yy::rays_divisor, :]
+                    for (xx, yy) in zip(offset_x, offset_y)
+                ]
+            )
+            light_positions = light_positions.repeat(
+                len(rays_o) // len(light_positions), 1
+            )
         batch_size, height, width = rays_o.shape[:3]
         rays_o_flatten: Float[Tensor, "Nr 3"] = rays_o.reshape(-1, 3)
         rays_d_flatten: Float[Tensor, "Nr 3"] = rays_d.reshape(-1, 3)
