@@ -45,7 +45,7 @@ system_type: "zero123-system"
 system:
   geometry_type: "implicit-volume"
   geometry:
-    radius: 2.0    
+    radius: 2.0
 
     # the density initialization proposed in the DreamFusion paper
     # does not work very well
@@ -63,8 +63,8 @@ system:
     pos_encoding_config:
       otype: KPlanes
       n_feature_count: 80
-      resolutions: [64, 128] #each entry N in this list creates K planes with resolution N x N. 
-      n_planes: 3 # 3D => 3, 4D => 4
+      resolutions: [64]     # each entry N in this list creates K planes with resolution N x N.
+      n_dimensions: 4            # 3 => 3 planes per resolution, 4 => 6 planes per resolution
     mlp_network_config:
       otype: "VanillaMLP"
       activation: "ReLU"

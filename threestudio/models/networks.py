@@ -1,4 +1,6 @@
+import itertools
 import math
+from typing import Callable, List, Tuple, cast
 
 import tinycudann as tcnn
 import torch
@@ -12,10 +14,6 @@ from threestudio.utils.misc import get_rank
 from threestudio.utils.ops import get_activation
 from threestudio.utils.typing import *
 
-
-
-import itertools
-from typing import List, Tuple, Callable, cast
 
 class ProgressiveBandFrequency(nn.Module, Updateable):
     def __init__(self, in_channels: int, config: dict):
@@ -55,12 +53,13 @@ class ProgressiveBandFrequency(nn.Module, Updateable):
                 f"Update mask: {global_step}/{self.n_masking_step} {self.mask}"
             )
 
+
 class KPlanesFeaturePlane(torch.nn.Module):
     def __init__(
         self,
         feature_dim: int = 8,
         resolution: Tuple[int, int] = (128, 128),
-        init: Callable = torch.nn.init.uniform_
+        init: Callable = torch.nn.init.uniform_,
     ):
         super().__init__()
         self.feature_dim = feature_dim
@@ -68,44 +67,60 @@ class KPlanesFeaturePlane(torch.nn.Module):
             self.plane = torch.nn.Parameter(torch.empty(1, feature_dim, *resolution))
         init(self.plane)
 
-    def forward(self, x: Float[torch.Tensor, "*N 2"]) -> Float[torch.Tensor, "*N C"]:   
-        # x is in the range 0 to 1, transform to -1 to 1. 
+    def forward(self, x: Float[torch.Tensor, "*N 2"]) -> Float[torch.Tensor, "*N C"]:
+        # x is in the range 0 to 1, transform to -1 to 1.
         x = (x * 2) - 1
-        new_shape = [*x.size()[:-1],self.feature_dim]
-        output = torch.nn.functional.grid_sample(
-            self.plane,
-            x.view(1,-1,1,2),
-            align_corners=True 
-        ).squeeze().transpose(0,-1).contiguous()
+        new_shape = [*x.size()[:-1], self.feature_dim]
+        output = (
+            torch.nn.functional.grid_sample(
+                self.plane, x.view(1, -1, 1, 2), align_corners=True
+            )
+            .squeeze()
+            .transpose(0, -1)
+            .contiguous()
+        )
         return output.view(new_shape)
 
     def loss_tv(self) -> torch.Tensor:
-        tv_x = torch.nn.functional.mse_loss(self.plane[:, :, 1:, :], self.plane[:, :, :-1, :])
-        tv_y = torch.nn.functional.mse_loss(self.plane[:, :, :, 1:], self.plane[:, :, :, :-1])
+        tv_x = torch.nn.functional.mse_loss(
+            self.plane[:, :, 1:, :], self.plane[:, :, :-1, :]
+        )
+        tv_y = torch.nn.functional.mse_loss(
+            self.plane[:, :, :, 1:], self.plane[:, :, :, :-1]
+        )
         return tv_x + tv_y
 
     def loss_l1(self) -> torch.Tensor:
         return torch.mean(torch.abs(self.plane))
 
+
 class KPlanesFeatureField(torch.nn.Module):
-    def __init__(self, n_input_dims : int, config):        
+    def __init__(self, n_input_dims: int, config):
         super().__init__()
 
+        # pairs of coordinates that will be used to compute plane feature *in that order*
+        # check the order if you want to have specific resolution for a given dimension (e.g. t in the paper)
+        self.dimension_pairs = list(
+            itertools.combinations(range(config["n_dimensions"]), 2)
+        )
+
         hierarchical_list = []
-        for resolution in config["resolutions"]: # e.g resolutions=[32,64,128]
-            plane_list = [KPlanesFeaturePlane(config["n_feature_count"], resolution=(resolution,resolution))] * config["n_planes"]
+        for resolution in config["resolutions"]:  # e.g resolutions=[32,64,128]
+            plane_list = [
+                KPlanesFeaturePlane(
+                    config["n_feature_count"], resolution=(resolution, resolution)
+                )
+            ] * len(self.dimension_pairs)
             hierarchical_list.append(torch.nn.ModuleList(plane_list))
 
         self.planes = torch.nn.ModuleList(hierarchical_list)
-        self.dropout = torch.nn.Dropout(0.)
-        # pairs of coordinates that will be used to compute plane feature *in that order*
-        # check the order if you want to have specific resolution for a given dimension (e.g. t in the paper)
-        self.dimension_pairs = list(itertools.combinations(range(config["n_planes"]), 2))
-        self.feature_dim = config["n_feature_count"] * len(config["resolutions"])
+        self.dropout = torch.nn.Dropout(0.0)
+
+        self.feature_dim = config["n_feature_count"] * len(self.planes)
 
         # mark the input dimensions (e.g., points in 3d space) and output feature size
-        self.n_input_dims = n_input_dims # e.g. 3
-        self.n_output_dims = self.feature_dim # e.g. 64
+        self.n_input_dims = n_input_dims  # e.g. 3
+        self.n_output_dims = self.feature_dim  # e.g. 64
 
         for plane_scale in self.planes:
             assert isinstance(plane_scale, torch.nn.ModuleList)
@@ -113,28 +128,29 @@ class KPlanesFeatureField(torch.nn.Module):
 
     def forward(self, x: Float[torch.Tensor, "*N D"]) -> Float[torch.Tensor, "*N C"]:
         features = []
+
         for plane_scale in self.planes:
-            current_scale_features = 1.
-            for (i, j), plane in zip(self.dimension_pairs, plane_scale): # type: ignore
-                current_scale_features *= plane(x[..., (i,j)])
+            current_scale_features = 1.0
+            for (i, j), plane in zip(self.dimension_pairs, plane_scale):
+                current_scale_features *= plane(x[..., (i, j)])
             features.append(current_scale_features)
-        output = self.dropout(torch.cat(features, -1)) # type: ignore
-        return output            
+        output = self.dropout(torch.cat(features, -1))
+        return output
 
     def loss_tv(self) -> torch.Tensor:
-        loss = 0.
+        loss = 0.0
         count = 0
         for plane_scale in self.planes:
-            for plane in plane_scale: # type: ignore
+            for plane in plane_scale:
                 loss += plane.loss_tv()
                 count += 1
         return cast(torch.Tensor, loss) / count
 
     def loss_l1(self) -> torch.Tensor:
-        loss = 0.
+        loss = 0.0
         count = 0
         for plane_scale in self.planes:
-            for plane in plane_scale: # type: ignore
+            for plane in plane_scale:
                 loss += plane.loss_l1()
                 count += 1
         return cast(torch.Tensor, loss) / count

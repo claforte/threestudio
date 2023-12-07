@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint, checkpoint_sequential
 
 import threestudio
 from threestudio.models.geometry.base import (
@@ -15,7 +16,6 @@ from threestudio.models.networks import get_encoding, get_mlp
 from threestudio.utils.ops import get_activation
 from threestudio.utils.typing import *
 
-from torch.utils.checkpoint import checkpoint, checkpoint_sequential
 
 @threestudio.register("implicit-volume")
 class ImplicitVolume(BaseImplicitGeometry):
@@ -117,15 +117,23 @@ class ImplicitVolume(BaseImplicitGeometry):
         points = contract_to_unisphere(
             points, self.bbox, self.unbounded
         )  # points normalized to (0, 1)
-        
+
         if torch.is_grad_enabled():
-            points.requires_grad_(True) # without this, the encoding output does not require_grad
-            enc = checkpoint(self.encoding, points.view(-1, self.cfg.n_input_dims), use_reentrant=True)
-            density = checkpoint(self.density_network.layers, enc, use_reentrant=True).view(*points.shape[:-1], 1)
+            points.requires_grad_(
+                True
+            )  # without this, the encoding output does not require_grad
+            enc = checkpoint(
+                self.encoding,
+                points.view(-1, self.cfg.n_input_dims),
+                use_reentrant=True,
+            )
+            density = checkpoint(
+                self.density_network.layers, enc, use_reentrant=True
+            ).view(*points.shape[:-1], 1)
         else:
             enc = self.encoding(points.view(-1, self.cfg.n_input_dims))
             density = self.density_network(enc).view(*points.shape[:-1], 1)
-        
+
         raw_density, density = self.get_activated_density(points_unscaled, density)
 
         output = {
@@ -134,9 +142,9 @@ class ImplicitVolume(BaseImplicitGeometry):
 
         if self.cfg.n_feature_dims > 0:
             if torch.is_grad_enabled():
-                features = checkpoint(self.feature_network.layers, enc, use_reentrant=True).view(
-                    *points.shape[:-1], self.cfg.n_feature_dims
-                )
+                features = checkpoint(
+                    self.feature_network.layers, enc, use_reentrant=True
+                ).view(*points.shape[:-1], self.cfg.n_feature_dims)
             else:
                 features = self.feature_network.layers(enc).view(
                     *points.shape[:-1], self.cfg.n_feature_dims
@@ -207,18 +215,23 @@ class ImplicitVolume(BaseImplicitGeometry):
     def forward_density(self, points: Float[Tensor, "*N Di"]) -> Float[Tensor, "*N 1"]:
         points_unscaled = points
         points = contract_to_unisphere(points_unscaled, self.bbox, self.unbounded)
-                
+
         if torch.is_grad_enabled():
             # nerfacc occupancy grid evaluates grid occupancy every N training steps using torch.no_grad so we must
             # check if grad is enabled to be safe using checkpointing (self.training is not correct to check)
             points.requires_grad_(True)
-            encoding = checkpoint(self.encoding, points.reshape(-1, self.cfg.n_input_dims), use_reentrant=True)
-            density = checkpoint(self.density_network.layers, encoding, use_reentrant=True
+            encoding = checkpoint(
+                self.encoding,
+                points.reshape(-1, self.cfg.n_input_dims),
+                use_reentrant=True,
+            )
+            density = checkpoint(
+                self.density_network.layers, encoding, use_reentrant=True
             ).reshape(*points.shape[:-1], 1)
         else:
             encoding = self.encoding(points.reshape(-1, self.cfg.n_input_dims))
             density = self.density_network(encoding).reshape(*points.shape[:-1], 1)
-            
+
         _, density = self.get_activated_density(points_unscaled, density)
         return density
 
