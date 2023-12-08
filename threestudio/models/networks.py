@@ -55,17 +55,12 @@ class ProgressiveBandFrequency(nn.Module, Updateable):
 
 
 class KPlanesFeaturePlane(torch.nn.Module):
-    def __init__(
-        self,
-        feature_dim: int = 8,
-        resolution: Tuple[int, int] = (128, 128),
-        init: Callable = torch.nn.init.uniform_,
-    ):
+    def __init__(self, feature_dim: int = 8, resolution: Tuple[int, int] = (128, 128)):
         super().__init__()
         self.feature_dim = feature_dim
         with torch.cuda.device(get_rank()):
             self.plane = torch.nn.Parameter(torch.empty(1, feature_dim, *resolution))
-        init(self.plane)
+        torch.nn.init.uniform_(self.plane)
 
     def forward(self, x: Float[torch.Tensor, "*N 2"]) -> Float[torch.Tensor, "*N C"]:
         # x is in the range 0 to 1, transform to -1 to 1.
@@ -100,17 +95,20 @@ class KPlanesFeatureField(torch.nn.Module):
 
         # pairs of coordinates that will be used to compute plane feature *in that order*
         # check the order if you want to have specific resolution for a given dimension (e.g. t in the paper)
-        self.dimension_pairs = list(
-            itertools.combinations(range(config["n_dimensions"]), 2)
-        )
 
+        self.dimension_pairs = [
+            torch.tensor(pair, device=f"cuda:{get_rank()}")
+            for pair in itertools.combinations(range(config["n_dimensions"]), 2)
+        ]
         hierarchical_list = []
         for resolution in config["resolutions"]:  # e.g resolutions=[32,64,128]
-            plane_list = [
-                KPlanesFeaturePlane(
-                    config["n_feature_count"], resolution=(resolution, resolution)
+            plane_list = []
+            for idx in range(len(self.dimension_pairs)):
+                plane_list.append(
+                    KPlanesFeaturePlane(
+                        config["n_feature_count"], resolution=(resolution, resolution)
+                    )
                 )
-            ] * len(self.dimension_pairs)
             hierarchical_list.append(torch.nn.ModuleList(plane_list))
 
         self.planes = torch.nn.ModuleList(hierarchical_list)
@@ -126,16 +124,16 @@ class KPlanesFeatureField(torch.nn.Module):
             assert isinstance(plane_scale, torch.nn.ModuleList)
             assert len(plane_scale) == len(self.dimension_pairs)
 
-    def forward(self, x: Float[torch.Tensor, "*N D"]) -> Float[torch.Tensor, "*N C"]:
+    def forward(self, x):
         features = []
 
         for plane_scale in self.planes:
             current_scale_features = 1.0
-            for (i, j), plane in zip(self.dimension_pairs, plane_scale):
-                current_scale_features *= plane(x[..., (i, j)])
+            for pair, plane in zip(self.dimension_pairs, plane_scale):
+                tmp = x[..., pair]
+                current_scale_features *= plane(tmp)
             features.append(current_scale_features)
-        output = self.dropout(torch.cat(features, -1))
-        return output
+        return torch.cat(features, -1)
 
     def loss_tv(self) -> torch.Tensor:
         loss = 0.0
