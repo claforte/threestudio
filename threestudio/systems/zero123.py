@@ -29,6 +29,8 @@ class Zero123(BaseLift3DSystem):
     def configure(self):
         # create geometry, material, background, renderer
         super().configure()
+        if len(self.cfg.guidance_type):
+            self.guidance = threestudio.find(self.cfg.guidance_type)(self.cfg.guidance)
 
     def forward(self, batch: Dict[str, Any]) -> Dict[str, Any]:
         render_out = self.renderer(**batch)
@@ -39,7 +41,6 @@ class Zero123(BaseLift3DSystem):
     def on_fit_start(self) -> None:
         super().on_fit_start()
         # no prompt processor
-        self.guidance = threestudio.find(self.cfg.guidance_type)(self.cfg.guidance)
 
         # visualize all training images
         all_images = self.trainer.datamodule.train_dataloader().dataset.get_all_images()
@@ -65,9 +66,9 @@ class Zero123(BaseLift3DSystem):
             ambient_ratio = 1.0
             shading = "diffuse"
             batch["shading"] = shading
-            rays_divisor = 2**ceil(self.C(self.cfg.rays_divisor_power))
-            offset_x_tensor = torch.randint(0,rays_divisor,(self.cfg.ref_batch_size,))
-            offset_y_tensor = torch.randint(0,rays_divisor,(self.cfg.ref_batch_size,))
+            rays_divisor = 2 ** ceil(self.C(self.cfg.rays_divisor_power))
+            offset_x_tensor = torch.randint(0, rays_divisor, (self.cfg.ref_batch_size,))
+            offset_y_tensor = torch.randint(0, rays_divisor, (self.cfg.ref_batch_size,))
         elif guidance == "zero123":
             batch = batch["random_camera"]
             # ambient_ratio = (
@@ -101,8 +102,18 @@ class Zero123(BaseLift3DSystem):
         )
 
         if guidance == "ref":
-            gt_mask = torch.cat([batch["mask"][:, xx::rays_divisor, yy::rays_divisor, :] for (xx, yy) in zip(offset_x_tensor, offset_y_tensor)])
-            gt_rgb = torch.cat([batch["rgb"][:, xx::rays_divisor, yy::rays_divisor, :] for (xx, yy) in zip(offset_x_tensor, offset_y_tensor)])
+            gt_mask = torch.cat(
+                [
+                    batch["mask"][:, xx::rays_divisor, yy::rays_divisor, :]
+                    for (xx, yy) in zip(offset_x_tensor, offset_y_tensor)
+                ]
+            )
+            gt_rgb = torch.cat(
+                [
+                    batch["rgb"][:, xx::rays_divisor, yy::rays_divisor, :]
+                    for (xx, yy) in zip(offset_x_tensor, offset_y_tensor)
+                ]
+            )
 
             # color loss
             gt_rgb = gt_rgb * gt_mask.float() + out["comp_rgb_bg"] * (
@@ -115,7 +126,12 @@ class Zero123(BaseLift3DSystem):
 
             # depth loss
             if self.C(self.cfg.loss.lambda_depth) > 0:
-                valid_gt_depth = torch.cat([batch["ref_depth"][:, xx::rays_divisor, yy::rays_divisor, :] for (xx, yy) in zip(offset_x_tensor, offset_y_tensor)])[gt_mask.squeeze(-1)].unsqueeze(1)
+                valid_gt_depth = torch.cat(
+                    [
+                        batch["ref_depth"][:, xx::rays_divisor, yy::rays_divisor, :]
+                        for (xx, yy) in zip(offset_x_tensor, offset_y_tensor)
+                    ]
+                )[gt_mask.squeeze(-1)].unsqueeze(1)
                 valid_pred_depth = out["depth"][gt_mask].unsqueeze(1)
                 with torch.no_grad():
                     A = torch.cat(
@@ -127,7 +143,12 @@ class Zero123(BaseLift3DSystem):
 
             # relative depth loss
             if self.C(self.cfg.loss.lambda_depth_rel) > 0:
-                valid_gt_depth = torch.cat([batch["ref_depth"][:, xx::rays_divisor, yy::rays_divisor, :] for (xx, yy) in zip(offset_x_tensor, offset_y_tensor)])[gt_mask.squeeze(-1)]
+                valid_gt_depth = torch.cat(
+                    [
+                        batch["ref_depth"][:, xx::rays_divisor, yy::rays_divisor, :]
+                        for (xx, yy) in zip(offset_x_tensor, offset_y_tensor)
+                    ]
+                )[gt_mask.squeeze(-1)]
                 valid_pred_depth = out["depth"][gt_mask]  # [B,]
                 set_loss(
                     "depth_rel", 1 - self.pearson(valid_pred_depth, valid_gt_depth)
@@ -136,7 +157,16 @@ class Zero123(BaseLift3DSystem):
             # normal loss
             if self.C(self.cfg.loss.lambda_normal) > 0:
                 valid_gt_normal = (
-                    1 - 2 * torch.cat([batch["ref_normal"][:, xx::rays_divisor, yy::rays_divisor, :] for (xx, yy) in zip(offset_x_tensor, offset_y_tensor)])[gt_mask.squeeze(-1)]
+                    1
+                    - 2
+                    * torch.cat(
+                        [
+                            batch["ref_normal"][
+                                :, xx::rays_divisor, yy::rays_divisor, :
+                            ]
+                            for (xx, yy) in zip(offset_x_tensor, offset_y_tensor)
+                        ]
+                    )[gt_mask.squeeze(-1)]
                 )  # [B, 3]
                 valid_pred_normal = (
                     2 * out["comp_normal"][gt_mask.squeeze(-1)] - 1
@@ -183,6 +213,10 @@ class Zero123(BaseLift3DSystem):
             normals = out["normal"]
             normals_perturb = out["normal_perturb"]
             set_loss("3d_normal_smooth", (normals - normals_perturb).abs().mean())
+
+        if self.cfg.geometry.pos_encoding_config.otype == "KPlanes":
+            set_loss("total_variation", self.geometry.encoding.encoding.loss_tv())
+            set_loss("l1_regularization", self.geometry.encoding.encoding.loss_l1())
 
         if not self.cfg.refinement:
             if self.C(self.cfg.loss.lambda_orient) > 0:
@@ -240,8 +274,9 @@ class Zero123(BaseLift3DSystem):
         total_loss = 0.0
 
         # ZERO123
-        out = self.training_substep(batch, batch_idx, guidance="zero123")
-        total_loss += out["loss"]
+        if self.cfg.guidance_type == "zero123-guidance":
+            out = self.training_substep(batch, batch_idx, guidance="zero123")
+            total_loss += out["loss"]
 
         # REF
         out = self.training_substep(batch, batch_idx, guidance="ref")

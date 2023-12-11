@@ -17,6 +17,7 @@ from tqdm import tqdm
 import threestudio
 from threestudio import register
 from threestudio.utils.config import parse_structured
+from threestudio.utils.misc import get_rank
 from threestudio.utils.ops import get_mvp_matrix, get_ray_directions, get_rays
 from threestudio.utils.typing import *
 
@@ -91,7 +92,9 @@ class MultiviewIterableDataset(IterableDataset):
         frames_position = []
         frames_direction = []
         frames_img = []
+        frames_mask = []
 
+        self.rank = get_rank()
         self.frame_w = frames[0]["w"] // scale
         self.frame_h = frames[0]["h"] // scale
         threestudio.info("Loading frames...")
@@ -116,6 +119,8 @@ class MultiviewIterableDataset(IterableDataset):
             rot_z_vector = c2w_list[:, :3, :3] @ z_vector
             rot_z_vector = torch.mean(rot_z_vector, dim=0).unsqueeze(0)
             c2w_list[:, :3, 3] -= rot_z_vector[:, :, 0] * self.cfg.camera_distance
+        elif self.cfg.camera_layout == "input":
+            pass  # no-op, use input poses
         else:
             raise ValueError(
                 f"Unknown camera layout {self.cfg.camera_layout}. Now support only around and front."
@@ -129,9 +134,19 @@ class MultiviewIterableDataset(IterableDataset):
             intrinsic[1, 2] = frame["cy"] / scale
 
             frame_path = os.path.join(self.cfg.dataroot, frame["file_path"])
-            img = cv2.imread(frame_path)[:, :, ::-1].copy()
+            rgba = cv2.cvtColor(
+                cv2.imread(frame_path, cv2.IMREAD_UNCHANGED),
+                cv2.COLOR_BGRA2RGBA,
+            )
+            rgba = (
+                cv2.resize(rgba, (self.frame_w, self.frame_h)).astype(np.float32) / 255
+            )
+            img = rgba[:, :, :3].copy()
             img = cv2.resize(img, (self.frame_w, self.frame_h))
-            img: Float[Tensor, "H W 3"] = torch.FloatTensor(img) / 255
+            img: Float[Tensor, "H W 3"] = torch.FloatTensor(img).to(self.rank)
+            mask: Float[Tensor, "H W 1"] = torch.from_numpy(rgba[..., 3:] > 0.5).to(
+                self.rank
+            )
             frames_img.append(img)
 
             direction: Float[Tensor, "H W 3"] = get_ray_directions(
@@ -153,6 +168,7 @@ class MultiviewIterableDataset(IterableDataset):
             frames_c2w.append(c2w)
             frames_position.append(camera_position)
             frames_direction.append(direction)
+            frames_mask.append(mask)
         threestudio.info("Loaded frames.")
 
         self.frames_proj: Float[Tensor, "B 4 4"] = torch.stack(frames_proj, dim=0)
@@ -162,6 +178,7 @@ class MultiviewIterableDataset(IterableDataset):
             frames_direction, dim=0
         )
         self.frames_img: Float[Tensor, "B H W 3"] = torch.stack(frames_img, dim=0)
+        self.frames_mask = torch.stack(frames_mask, dim=0)
 
         self.rays_o, self.rays_d = get_rays(
             self.frames_direction, self.frames_c2w, keepdim=True
@@ -169,9 +186,7 @@ class MultiviewIterableDataset(IterableDataset):
         self.mvp_mtx: Float[Tensor, "B 4 4"] = get_mvp_matrix(
             self.frames_c2w, self.frames_proj
         )
-        self.light_positions: Float[Tensor, "B 3"] = torch.zeros_like(
-            self.frames_position
-        )
+        self.light_positions: Float[Tensor, "B 3"] = self.frames_position
 
     def __iter__(self):
         while True:
@@ -188,9 +203,14 @@ class MultiviewIterableDataset(IterableDataset):
             "camera_positions": self.frames_position[index : index + 1],
             "light_positions": self.light_positions[index : index + 1],
             "gt_rgb": self.frames_img[index : index + 1],
+            "rgb": self.frames_img[index : index + 1],
+            "mask": self.frames_mask[index : index + 1],
             "height": self.frame_h,
             "width": self.frame_w,
         }
+
+    def get_all_images(self):
+        return self.frames_img
 
 
 class MultiviewDataset(Dataset):
@@ -238,6 +258,8 @@ class MultiviewDataset(Dataset):
             rot_z_vector = c2w_list[:, :3, :3] @ z_vector
             rot_z_vector = torch.mean(rot_z_vector, dim=0).unsqueeze(0)
             c2w_list[:, :3, 3] -= rot_z_vector[:, :, 0] * self.cfg.camera_distance
+        elif self.cfg.camera_layout == "input":
+            pass  # no-op, use input poses
         else:
             raise ValueError(
                 f"Unknown camera layout {self.cfg.camera_layout}. Now support only around and front."
@@ -349,9 +371,7 @@ class MultiviewDataset(Dataset):
         self.mvp_mtx: Float[Tensor, "B 4 4"] = get_mvp_matrix(
             self.frames_c2w, self.frames_proj
         )
-        self.light_positions: Float[Tensor, "B 3"] = torch.zeros_like(
-            self.frames_position
-        )
+        self.light_positions: Float[Tensor, "B 3"] = self.frames_position
 
     def __len__(self):
         return self.frames_proj.shape[0]
@@ -400,7 +420,7 @@ class MultiviewDataModule(pl.LightningDataModule):
     def general_loader(self, dataset, batch_size, collate_fn=None) -> DataLoader:
         return DataLoader(
             dataset,
-            num_workers=1,  # type: ignore
+            num_workers=0,  # type: ignore
             batch_size=batch_size,
             collate_fn=collate_fn,
         )
