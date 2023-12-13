@@ -1,0 +1,82 @@
+name: "kplanes_refine"
+tag: "${data.random_camera.height}_${rmspace:${basename:${data.image_path}},_}_${rmspace:${system.prompt_processor.prompt},_}"
+exp_root_dir: "outputs"
+seed: 0
+
+data_type: "multiview-camera-datamodule"
+data:
+  train_downsample_resolution: 1
+  eval_downsample_resolution: 1
+  dataroot: ???
+  camera_layout: "input"
+
+system_type: "magic123-system"
+system:
+  refinement: true
+  geometry_convert_from: "implicit-volume"
+  geometry_convert_inherit_texture: true
+  geometry_type: "tetrahedra-sdf-grid"
+  geometry:
+    radius: 2.0 # consistent with coarse
+    isosurface_resolution: 128
+    isosurface_deformable_grid: true
+    pos_encoding_config:
+      otype: KPlanes
+      n_feature_count: 16
+      resolutions: [128, 256, 512]     # each entry N in this list creates K planes with resolution N x N.
+      n_dimensions: 3            # 3 => 3 planes per resolution, 4 => 6 planes per resolution
+    mlp_network_config:
+      otype: "VanillaMLP"
+      activation: "ReLU"
+      output_activation: "none"
+      n_neurons: 64
+      n_hidden_layers: 2
+
+  material_type: "diffuse-with-point-light-material"
+  material:
+    ambient_only_steps: 0
+    textureless_prob: 0.05
+    albedo_activation: sigmoid
+
+  background_type: "solid-color-background"
+  background:
+    random_aug_prob: 0.5
+    random_aug: true
+
+  renderer_type: "nvdiff-rasterizer"
+  renderer:
+    context_type: cuda
+  loggers:
+    wandb:
+      enable: false
+      project: "threestudio"
+      name: None
+
+  loss:
+    lambda_rgb: 1000.
+    lambda_mask: 100.
+    lambda_sd: 0.025
+    lambda_3d_sd: 1.
+    lambda_normal_consistency: 1000.
+    lambda_laplacian_smoothness: 0.
+    lambda_lpips: 200.0
+
+  optimizer:
+    name: Adam
+    args:
+      lr: 0.005
+      betas: [0.9, 0.99]
+      eps: 1.e-8
+
+trainer:
+  max_steps: 10000
+  log_every_n_steps: 1
+  num_sanity_val_steps: 1
+  val_check_interval: 1000
+  enable_progress_bar: true
+  precision: 32
+
+checkpoint:
+  save_last: true # save at each validation time
+  save_top_k: -1
+  every_n_train_steps: ${trainer.max_steps}

@@ -7,6 +7,7 @@ from math import ceil
 import torch
 import torch.nn.functional as F
 from torchmetrics import PearsonCorrCoef
+from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
 import threestudio
 from threestudio.systems.base import BaseLift3DSystem
@@ -31,6 +32,14 @@ class Zero123(BaseLift3DSystem):
         super().configure()
         if len(self.cfg.guidance_type):
             self.guidance = threestudio.find(self.cfg.guidance_type)(self.cfg.guidance)
+
+        if self.C(self.cfg.loss.lambda_lpips) > 0:
+            self.lpips = LearnedPerceptualImagePatchSimilarity(
+                net_type="vgg", normalize=True
+            )
+            self.lpips.eval()
+            for p in self.lpips.parameters():
+                p.requires_grad = False
 
     def forward(self, batch: Dict[str, Any]) -> Dict[str, Any]:
         render_out = self.renderer(**batch)
@@ -120,6 +129,16 @@ class Zero123(BaseLift3DSystem):
                 1 - gt_mask.float()
             )
             set_loss("rgb", F.mse_loss(gt_rgb, out["comp_rgb"]))
+
+            if self.C(self.cfg.loss.lambda_lpips) > 0:
+                # lpips expects images in range [-1,1] and (N,3,H,W)
+                set_loss(
+                    "lpips",
+                    self.lpips(
+                        gt_rgb.permute(0, 3, 1, 2),
+                        out["comp_rgb"].clamp(0, 1).permute(0, 3, 1, 2),
+                    ),
+                )
 
             # mask loss
             set_loss("mask", F.mse_loss(gt_mask.float(), out["opacity"]))
@@ -349,7 +368,7 @@ class Zero123(BaseLift3DSystem):
             filestem,
             "(\d+)\.png",
             save_format="mp4",
-            fps=30,
+            fps=5,
             name="validation_epoch_end",
             step=self.true_global_step,
         )

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 import torch
 import torch.nn.functional as F
+from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
 import threestudio
 from threestudio.systems.base import BaseLift3DSystem
@@ -24,16 +25,25 @@ class Magic123(BaseLift3DSystem):
         rays_divisor_power: int = 0
         ref_batch_size: int = 1
 
-
     cfg: Config
 
     def configure(self):
         # create geometry, material, background, renderer
         super().configure()
-        self.guidance = threestudio.find(self.cfg.guidance_type)(self.cfg.guidance)
-        self.guidance_3d = threestudio.find(self.cfg.guidance_3d_type)(
-            self.cfg.guidance_3d
-        )
+        if len(self.cfg.guidance_type):
+            self.guidance = threestudio.find(self.cfg.guidance_type)(self.cfg.guidance)
+        if len(self.cfg.guidance_3d_type):
+            self.guidance_3d = threestudio.find(self.cfg.guidance_3d_type)(
+                self.cfg.guidance_3d
+            )
+
+        if self.C(self.cfg.loss.lambda_lpips) > 0:
+            self.lpips = LearnedPerceptualImagePatchSimilarity(
+                net_type="vgg", normalize=True
+            )
+            self.lpips.eval()
+            for p in self.lpips.parameters():
+                p.requires_grad = False
 
     def forward(self, batch: Dict[str, Any]) -> Dict[str, Any]:
         render_out = self.renderer(**batch)
@@ -43,26 +53,39 @@ class Magic123(BaseLift3DSystem):
 
     def on_fit_start(self) -> None:
         super().on_fit_start()
-        self.prompt_processor = threestudio.find(self.cfg.prompt_processor_type)(
-            self.cfg.prompt_processor
-        )
+        if len(self.cfg.prompt_processor_type):
+            self.prompt_processor = threestudio.find(self.cfg.prompt_processor_type)(
+                self.cfg.prompt_processor
+            )
 
     def training_step(self, batch, batch_idx):
         out_input = self(batch)
-        out = self(batch["random_camera"])
-        prompt_utils = self.prompt_processor()
-        guidance_out = self.guidance(
-            out["comp_rgb"],
-            prompt_utils,
-            **batch["random_camera"],
-            rgb_as_latents=False,
-        )
-        guidance_3d_out = self.guidance_3d(
-            out["comp_rgb"],
-            **batch["random_camera"],
-            rgb_as_latents=False,
-        )
+        if "random_camera" in batch:
+            out = self(batch["random_camera"])
+        else:
+            out = self(batch)
 
+        if len(self.cfg.prompt_processor_type):
+            prompt_utils = self.prompt_processor()
+        if len(self.cfg.guidance_type):
+            guidance_out = self.guidance(
+                out["comp_rgb"],
+                prompt_utils,
+                **batch["random_camera"],
+                rgb_as_latents=False,
+            )
+        else:
+            # e.g., using multiview dataset for a sanity check
+            guidance_out = {}
+        if len(self.cfg.guidance_3d_type):
+            guidance_3d_out = self.guidance_3d(
+                out["comp_rgb"],
+                **batch["random_camera"],
+                rgb_as_latents=False,
+            )
+        else:
+            # e.g., using multiview dataset for a sanity check
+            guidance_3d_out = {}
         loss = 0.0
 
         loss_rgb = F.mse_loss(
@@ -79,6 +102,15 @@ class Magic123(BaseLift3DSystem):
         )
         self.log("train/loss_mask", loss_mask)
         loss += loss_mask * self.C(self.cfg.loss.lambda_mask)
+
+        if self.C(self.cfg.loss.lambda_lpips) > 0:
+            # lpips expects images in range [-1,1] and (N,3,H,W)
+            loss_lpips = self.lpips(
+                batch["rgb"].permute(0, 3, 1, 2),
+                out["comp_rgb"].clamp(0, 1).permute(0, 3, 1, 2),
+            )
+            loss += loss_lpips * self.C(self.cfg.loss.lambda_lpips)
+            self.log("train/loss_lpips", loss_lpips)
 
         for name, value in guidance_out.items():
             if not (isinstance(value, torch.Tensor) and len(value.shape) > 0):
