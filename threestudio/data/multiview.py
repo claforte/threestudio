@@ -142,11 +142,13 @@ class MultiviewIterableDataset(IterableDataset):
                 cv2.resize(rgba, (self.frame_w, self.frame_h)).astype(np.float32) / 255
             )
             img = rgba[:, :, :3].copy()
+            mask = torch.tensor(
+                np.all(img[:, :, :3] <= [0.8, 0.8, 0.8], axis=-1)
+            ).unsqueeze(-1)
             img = cv2.resize(img, (self.frame_w, self.frame_h))
             img: Float[Tensor, "H W 3"] = torch.FloatTensor(img).to(self.rank)
-            mask: Float[Tensor, "H W 1"] = torch.from_numpy(rgba[..., 3:] > 0.5).to(
-                self.rank
-            )
+
+            # mask: Float[Tensor, "H W 1"] = torch.from_numpy(rgba[..., 3:] > 0.5).to(self.rank)
             frames_img.append(img)
 
             direction: Float[Tensor, "H W 3"] = get_ray_directions(

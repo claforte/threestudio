@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.checkpoint import checkpoint, checkpoint_sequential
+from line_profiler import profile
 
 import threestudio
 from threestudio.models.geometry.base import (
@@ -13,8 +13,15 @@ from threestudio.models.geometry.base import (
     contract_to_unisphere,
 )
 from threestudio.models.networks import get_encoding, get_mlp
+from threestudio.utils.misc import get_rank
 from threestudio.utils.ops import get_activation
 from threestudio.utils.typing import *
+
+# from torch.utils.checkpoint import checkpoint, checkpoint_sequential
+
+
+def checkpoint(func, arg, use_reentrant=True):
+    return func(arg)
 
 
 @threestudio.register("implicit-volume")
@@ -75,6 +82,24 @@ class ImplicitVolume(BaseImplicitGeometry):
                 self.encoding.n_output_dims, 3, self.cfg.mlp_network_config
             )
 
+        # define here to avoid cpu-to-gpu synchronization if created inline
+        eps = self.cfg.finite_difference_normal_eps
+        self.OFFSET_FINITE_DIFFERENCE_LAPLACIAN = torch.as_tensor(
+            [
+                [eps, 0.0, 0.0],
+                [-eps, 0.0, 0.0],
+                [0.0, eps, 0.0],
+                [0.0, -eps, 0.0],
+                [0.0, 0.0, eps],
+                [0.0, 0.0, -eps],
+            ],
+            device=f"cuda:{get_rank()}",
+        )
+        self.OFFSET_FINITE_DIFFERENCE = torch.as_tensor(
+            [[eps, 0.0, 0.0], [0.0, eps, 0.0], [0.0, 0.0, eps]],
+            device=f"cuda:{get_rank()}",
+        )
+
     def get_activated_density(
         self, points: Float[Tensor, "*N Di"], density: Float[Tensor, "*N 1"]
     ) -> Tuple[Float[Tensor, "*N 1"], Float[Tensor, "*N 1"]]:
@@ -104,6 +129,7 @@ class ImplicitVolume(BaseImplicitGeometry):
         density = get_activation(self.cfg.density_activation)(raw_density)
         return raw_density, density
 
+    @profile
     def forward(
         self, points: Float[Tensor, "*N Di"], output_normal: bool = False
     ) -> Dict[str, Float[Tensor, "..."]]:
@@ -119,14 +145,7 @@ class ImplicitVolume(BaseImplicitGeometry):
         )  # points normalized to (0, 1)
 
         if torch.is_grad_enabled():
-            points.requires_grad_(
-                True
-            )  # without this, the encoding output does not require_grad
-            enc = checkpoint(
-                self.encoding,
-                points.view(-1, self.cfg.n_input_dims),
-                use_reentrant=True,
-            )
+            enc = checkpoint(self.encoding, points.view(-1, self.cfg.n_input_dims))
             density = checkpoint(
                 self.density_network.layers, enc, use_reentrant=True
             ).view(*points.shape[:-1], 1)
@@ -159,18 +178,9 @@ class ImplicitVolume(BaseImplicitGeometry):
                 # TODO: use raw density
                 eps = self.cfg.finite_difference_normal_eps
                 if self.cfg.normal_type == "finite_difference_laplacian":
-                    offsets: Float[Tensor, "6 3"] = torch.as_tensor(
-                        [
-                            [eps, 0.0, 0.0],
-                            [-eps, 0.0, 0.0],
-                            [0.0, eps, 0.0],
-                            [0.0, -eps, 0.0],
-                            [0.0, 0.0, eps],
-                            [0.0, 0.0, -eps],
-                        ]
-                    ).to(points_unscaled)
                     points_offset: Float[Tensor, "... 6 3"] = (
-                        points_unscaled[..., None, :] + offsets
+                        points_unscaled[..., None, :]
+                        + self.OFFSET_FINITE_DIFFERENCE_LAPLACIAN
                     ).clamp(-self.cfg.radius, self.cfg.radius)
                     density_offset: Float[Tensor, "... 6 1"] = self.forward_density(
                         points_offset
@@ -181,11 +191,8 @@ class ImplicitVolume(BaseImplicitGeometry):
                         / eps
                     )
                 else:
-                    offsets: Float[Tensor, "3 3"] = torch.as_tensor(
-                        [[eps, 0.0, 0.0], [0.0, eps, 0.0], [0.0, 0.0, eps]]
-                    ).to(points_unscaled)
                     points_offset: Float[Tensor, "... 3 3"] = (
-                        points_unscaled[..., None, :] + offsets
+                        points_unscaled[..., None, :] + self.OFFSET_FINITE_DIFFERENCE
                     ).clamp(-self.cfg.radius, self.cfg.radius)
                     density_offset: Float[Tensor, "... 3 1"] = self.forward_density(
                         points_offset
@@ -212,18 +219,16 @@ class ImplicitVolume(BaseImplicitGeometry):
         torch.set_grad_enabled(grad_enabled)
         return output
 
+    @profile
     def forward_density(self, points: Float[Tensor, "*N Di"]) -> Float[Tensor, "*N 1"]:
         points_unscaled = points
         points = contract_to_unisphere(points_unscaled, self.bbox, self.unbounded)
-
         if torch.is_grad_enabled():
             # nerfacc occupancy grid evaluates grid occupancy every N training steps using torch.no_grad so we must
             # check if grad is enabled to be safe using checkpointing (self.training is not correct to check)
             points.requires_grad_(True)
             encoding = checkpoint(
-                self.encoding,
-                points.reshape(-1, self.cfg.n_input_dims),
-                use_reentrant=True,
+                self.encoding, points.reshape(-1, self.cfg.n_input_dims)
             )
             density = checkpoint(
                 self.density_network.layers, encoding, use_reentrant=True

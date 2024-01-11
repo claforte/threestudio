@@ -52,51 +52,27 @@ class Zero123(BaseLift3DSystem):
         # no prompt processor
 
         # visualize all training images
-        all_images = self.trainer.datamodule.train_dataloader().dataset.get_all_images()
-        self.save_image_grid(
-            "all_training_images.png",
-            [
-                {"type": "rgb", "img": image, "kwargs": {"data_format": "HWC"}}
-                for image in all_images
-            ],
-            name="on_fit_start",
-            step=self.true_global_step,
-        )
+        try:
+            all_images = (
+                self.trainer.datamodule.train_dataloader().dataset.get_all_images()
+            )
+            self.save_image_grid(
+                "all_training_images.png",
+                [
+                    {"type": "rgb", "img": image, "kwargs": {"data_format": "HWC"}}
+                    for image in all_images
+                ],
+                name="on_fit_start",
+                step=self.true_global_step,
+            )
+        except Exception as e:
+            pass
 
         self.pearson = PearsonCorrCoef().to(self.device)
 
-    def training_substep(self, batch, batch_idx, guidance: str):
-        """
-        Args:
-            guidance: one of "ref" (reference image supervision), "zero123"
-        """
-        if guidance == "ref":
-            # bg_color = torch.rand_like(batch['rays_o'])
-            ambient_ratio = 1.0
-            shading = "diffuse"
-            batch["shading"] = shading
-            rays_divisor = 2 ** ceil(self.C(self.cfg.rays_divisor_power))
-            offset_x_tensor = torch.randint(0, rays_divisor, (self.cfg.ref_batch_size,))
-            offset_y_tensor = torch.randint(0, rays_divisor, (self.cfg.ref_batch_size,))
-        elif guidance == "zero123":
-            batch = batch["random_camera"]
-            # ambient_ratio = (
-            #     self.C(self.cfg.ambient_ratio_min)
-            #     + (1 - self.C(self.cfg.ambient_ratio_min)) * random.random()
-            # )
-            ambient_ratio = self.C(self.cfg.ambient_ratio_min)
-            rays_divisor = 1
-            offset_x_tensor = torch.zeros(1, dtype=torch.int64)
-            offset_y_tensor = torch.zeros(1, dtype=torch.int64)
-
-        batch["rays_divisor"] = rays_divisor
-        batch["offset_x"] = offset_x_tensor
-        batch["offset_y"] = offset_y_tensor
-
-        batch["bg_color"] = None
-        batch["ambient_ratio"] = ambient_ratio
-
-        out = self(batch)
+    def compute_loss(
+        self, out, guidance, batch, rays_divisor, offset_x_tensor, offset_y_tensor
+    ):
         loss_prefix = f"loss_{guidance}_"
 
         loss_terms = {}
@@ -234,8 +210,10 @@ class Zero123(BaseLift3DSystem):
             set_loss("3d_normal_smooth", (normals - normals_perturb).abs().mean())
 
         if self.cfg.geometry.pos_encoding_config.otype == "KPlanes":
-            set_loss("total_variation", self.geometry.encoding.encoding.loss_tv())
-            set_loss("l1_regularization", self.geometry.encoding.encoding.loss_l1())
+            if self.C(self.cfg.loss.lambda_total_variation) > 0:
+                set_loss("total_variation", self.geometry.encoding.encoding.loss_tv())
+            if self.C(self.cfg.loss.lambda_l1_regularization) > 0:
+                set_loss("l1_regularization", self.geometry.encoding.encoding.loss_l1())
 
         if not self.cfg.refinement:
             if self.C(self.cfg.loss.lambda_orient) > 0:
@@ -288,6 +266,42 @@ class Zero123(BaseLift3DSystem):
             )
 
         return {"loss": loss}
+
+    def training_substep(self, batch, batch_idx, guidance: str):
+        """
+        Args:
+            guidance: one of "ref" (reference image supervision), "zero123"
+        """
+        if guidance == "ref":
+            # bg_color = torch.rand_like(batch['rays_o'])
+            ambient_ratio = 1.0
+            shading = "diffuse"
+            batch["shading"] = shading
+            rays_divisor = 2 ** ceil(self.C(self.cfg.rays_divisor_power))
+            offset_x_tensor = torch.randint(0, rays_divisor, (self.cfg.ref_batch_size,))
+            offset_y_tensor = torch.randint(0, rays_divisor, (self.cfg.ref_batch_size,))
+        elif guidance == "zero123":
+            batch = batch["random_camera"]
+            # ambient_ratio = (
+            #     self.C(self.cfg.ambient_ratio_min)
+            #     + (1 - self.C(self.cfg.ambient_ratio_min)) * random.random()
+            # )
+            ambient_ratio = self.C(self.cfg.ambient_ratio_min)
+            rays_divisor = 1
+            offset_x_tensor = torch.zeros(1, dtype=torch.int64)
+            offset_y_tensor = torch.zeros(1, dtype=torch.int64)
+
+        batch["rays_divisor"] = rays_divisor
+        batch["offset_x"] = offset_x_tensor
+        batch["offset_y"] = offset_y_tensor
+
+        batch["bg_color"] = None
+        batch["ambient_ratio"] = ambient_ratio
+
+        out = self(batch)
+        return self.compute_loss(
+            out, guidance, batch, rays_divisor, offset_x_tensor, offset_y_tensor
+        )
 
     def training_step(self, batch, batch_idx):
         total_loss = 0.0

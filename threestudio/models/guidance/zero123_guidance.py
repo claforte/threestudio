@@ -75,7 +75,7 @@ def load_model_from_config(
 
     model.eval().to(device)
 
-    return model
+    return torch.compile(model, fullgraph=True)
 
 
 @threestudio.register("zero123-guidance")
@@ -160,7 +160,9 @@ class Zero123Guidance(BaseObject):
         self.max_step = int(self.num_train_timesteps * max_step_percent)
 
     @torch.cuda.amp.autocast(enabled=False)
-    def prepare_embeddings(self, image_path: str, background_color: Tuple[int, int, int] = (255, 255, 255)) -> None:
+    def prepare_embeddings(
+        self, image_path: str, background_color: Tuple[int, int, int] = (255, 255, 255)
+    ) -> None:
         # load cond image for zero123
         assert os.path.exists(image_path)
         rgba = cv2.cvtColor(

@@ -63,6 +63,7 @@ def main(args, extras) -> None:
     from pytorch_lightning import Trainer
     from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
     from pytorch_lightning.loggers import CSVLogger, TensorBoardLogger
+    from pytorch_lightning.profilers import PyTorchProfiler, SimpleProfiler
     from pytorch_lightning.utilities.rank_zero import rank_zero_only
 
     if args.typecheck:
@@ -70,17 +71,25 @@ def main(args, extras) -> None:
 
         install_import_hook("threestudio", "typeguard.typechecked")
 
+    from line_profiler import profile
+
     import threestudio
     from threestudio.systems.base import BaseSystem
     from threestudio.utils.callbacks import (
         CodeSnapshotCallback,
         ConfigSnapshotCallback,
         CustomProgressBar,
+        MemoryAnalysisCallback,
         ProgressCallback,
+        TensorVizCallback,
     )
     from threestudio.utils.config import ExperimentConfig, load_config
     from threestudio.utils.misc import get_rank
     from threestudio.utils.typing import Optional
+
+    # torch.cuda.memory._record_memory_history(enabled="all", context="all", stacks="python")
+
+    torch.set_float32_matmul_precision("high")
 
     logger = logging.getLogger("pytorch_lightning")
     if args.verbose:
@@ -131,6 +140,7 @@ def main(args, extras) -> None:
                 os.path.join(cfg.trial_dir, "configs"),
                 use_version=False,
             ),
+            # MemoryAnalysisCallback("trace", [5, 1005, 2005, 3005]),
         ]
         if args.gradio:
             callbacks += [
@@ -161,12 +171,14 @@ def main(args, extras) -> None:
             )
         )()
 
+    torch.cuda.set_per_process_memory_fraction(0.85, "cuda:0")
     trainer = Trainer(
         callbacks=callbacks,
         logger=loggers,
         inference_mode=False,
         accelerator="gpu",
         devices=devices,
+        profiler=SimpleProfiler(dirpath="/home/kplanes2/", filename="simple-profile"),
         **cfg.trainer,
     )
 
@@ -227,7 +239,18 @@ if __name__ == "__main__":
         help="whether to enable dynamic type checking",
     )
 
-    args, extras = parser.parse_known_args()
+    #### PHASE 1
+    command = "--config /home/kplanes2/configs/kplanes_no_sds.yaml --train name=jenga tag=kplanes use_timestamp=False data.dataroot=/home/temp/multiview]/SVD21_FTcontinue/2_of_Jenga_Classic_Game_000.png"
+    # command = "--config /home/kplanes2/configs/kplanes_no_sds.yaml --train name=sunflower tag=kplanes use_timestamp=False data.dataroot=/home/kplanes2/load/sunflower"
+    # command = "--config ./configs/kplanes_no_sds.yaml --train name=chair tag=kplanes use_timestamp=False data.dataroot=load/chair"
+    # command = "--config ./configs/zero123_sai_kplanes.yaml --train data.image_path=load/images/anya_front_rgba.png tag=anya name=anya tag=kplanes use_timestamp=False"
+    # command = "--config ./configs/zero123_sai_multinoise_amb.yaml --train data.image_path=load/images/anya_front_rgba.png tag=anya name=anya tag=hashgrid use_timestamp=False"
+
+    #### PHASE 2
+    # command = "--config ./configs/kplanes_refine_no_sds.yaml system.geometry_convert_from=outputs/sunflower/kplanes/ckpts/last.ckpt --train name=sunflower tag=kplanes2 use_timestamp=False data.dataroot=load/sunflower"
+    # command = "--config ./configs/kplanes_refine_no_sds.yaml system.geometry_convert_from=outputs/chair/kplanes/ckpts/last-v16.ckpt --train name=chair tag=kplanes2 use_timestamp=False data.dataroot=load/chair"
+
+    args, extras = parser.parse_known_args(command.split())
 
     if args.gradio:
         # FIXME: no effect, stdout is not captured

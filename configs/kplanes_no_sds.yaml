@@ -5,7 +5,7 @@ seed: 0
 
 data_type: "multiview-camera-datamodule"
 data:
-  train_downsample_resolution: 1
+  train_downsample_resolution: 4
   eval_downsample_resolution: 1
   dataroot: ???
   camera_layout: "input"
@@ -28,24 +28,29 @@ system:
     density_activation: softplus
     density_blob_scale: 10.
     density_blob_std: 0.5
+    n_feature_dims: 16
 
     pos_encoding_config:
       otype: KPlanes
-      n_feature_count: 16
-      resolutions: [128, 256, 512]     # each entry N in this list creates K planes with resolution N x N.
+      n_feature_count: 32
+      resolutions: [128,256,512]     # each entry N in this list creates K planes with resolution N x N.
       n_dimensions: 3            # 3 => 3 planes per resolution, 4 => 6 planes per resolution
     mlp_network_config:
       otype: "VanillaMLP"
       activation: "ReLU"
       output_activation: "none"
       n_neurons: 64
-      n_hidden_layers: 2
+      n_hidden_layers: 1
 
-  material_type: "diffuse-with-point-light-material"
+
+  material_type: "neural-radiance-material"
   material:
-    ambient_only_steps: 0
-    textureless_prob: 0.05
-    albedo_activation: sigmoid
+    input_feature_dims: 16
+    dir_encoding_config:
+      otype: "SphericalHarmonics"
+      degree: 4
+
+
 
   background_type: "solid-color-background"
 
@@ -72,19 +77,19 @@ system:
 
   loss:
     lambda_sds: 0.1
-    lambda_rgb: [100, 500., 1000., 400]
-    lambda_mask: 50.
+    lambda_rgb: [100, 50., 100., 400]
+    lambda_mask: 0
     lambda_depth: 0. # 0.05
     lambda_depth_rel: 0. # [0, 0, 0.05, 100]
     lambda_normal: 0. # [0, 0, 0.05, 100]
-    lambda_normal_smooth: [100, 7.0, 5.0, 150, 10.0, 200]
-    lambda_3d_normal_smooth: [100, 7.0, 5.0, 150, 10.0, 200]
-    lambda_orient: 1.0
-    lambda_sparsity: 0.5 # should be tweaked for every model
-    lambda_opaque: 0.5
-    lambda_l1_regularization: 0.5
-    lambda_total_variation: 0.5
-    lambda_lpips: [100, 100.0, 200.0, 400]
+    lambda_normal_smooth: 0
+    lambda_3d_normal_smooth: 0
+    lambda_orient: 0.0
+    lambda_sparsity: 0 # should be tweaked for every model
+    lambda_opaque: 0
+    lambda_l1_regularization: 0
+    lambda_total_variation: 0
+    lambda_lpips: 100
 
   optimizer:
     name: Adam

@@ -68,7 +68,7 @@ class KPlanesFeaturePlane(torch.nn.Module):
         new_shape = [*x.size()[:-1], self.feature_dim]
         output = (
             torch.nn.functional.grid_sample(
-                self.plane, x.view(1, -1, 1, 2), align_corners=True
+                self.plane, x.view(1, 1, -1, 2), align_corners=True
             )
             .squeeze()
             .transpose(0, -1)
@@ -133,7 +133,11 @@ class KPlanesFeatureField(torch.nn.Module):
                 tmp = x[..., pair]
                 current_scale_features *= plane(tmp)
             features.append(current_scale_features)
-        return torch.cat(features, -1)
+
+        if len(features) > 1:
+            return torch.cat(features, -1)
+        else:
+            return features[0]
 
     def loss_tv(self) -> torch.Tensor:
         loss = 0.0
