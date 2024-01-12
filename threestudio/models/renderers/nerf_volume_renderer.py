@@ -58,7 +58,7 @@ class NeRFVolumeRenderer(VolumeRenderer):
         super().configure(geometry, material, background)
         if self.cfg.estimator == "occgrid":
             self.estimator = nerfacc.OccGridEstimator(
-                roi_aabb=self.bbox.view(-1), resolution=32, levels=1
+                roi_aabb=self.bbox.view(-1), resolution=16, levels=1
             )
             if not self.cfg.grid_prune:
                 self.estimator.occs.fill_(True)

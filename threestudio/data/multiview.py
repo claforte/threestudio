@@ -16,6 +16,8 @@ from tqdm import tqdm
 
 import threestudio
 from threestudio import register
+from threestudio.data.uncond import RandomCameraDataset
+from threestudio.utils.base import Updateable
 from threestudio.utils.config import parse_structured
 from threestudio.utils.misc import get_rank
 from threestudio.utils.ops import get_mvp_matrix, get_ray_directions, get_rays
@@ -71,8 +73,32 @@ class MultiviewsDataModuleConfig:
     camera_distance: float = -1
     eval_interpolation: Optional[Tuple[int, int, int]] = None  # (0, 1, 30)
 
+    eval_height: int = 512
+    eval_width: int = 512
+    eval_batch_size: int = 1
+    n_val_views: int = 30
+    n_test_views: int = 120
+    elevation_range: Tuple[float, float] = (-10, 90)
+    azimuth_range: Tuple[float, float] = (-180, 180)
+    camera_distance_range: Tuple[float, float] = (1, 1.5)
+    fovy_range: Tuple[float, float] = (
+        40,
+        70,
+    )  # in degrees, in vertical direction (along height)
+    camera_perturb: float = 0.1
+    center_perturb: float = 0.2
+    up_perturb: float = 0.02
+    light_position_perturb: float = 1.0
+    light_distance_range: Tuple[float, float] = (0.8, 1.5)
+    eval_elevation_deg: float = 0
+    eval_camera_distance: float = 2.2
+    eval_fovy_deg: float = 70.0
+    light_sample_strategy: str = "dreamfusion"
+    batch_uniform_azimuth: bool = True
+    progressive_until: int = 0  # progressive ranges for elevation, azimuth, r, fovy
 
-class MultiviewIterableDataset(IterableDataset):
+
+class MultiviewIterableDataset(IterableDataset, Updateable):
     def __init__(self, cfg: Any) -> None:
         super().__init__()
         self.cfg: MultiviewsDataModuleConfig = cfg
@@ -143,7 +169,7 @@ class MultiviewIterableDataset(IterableDataset):
             )
             img = rgba[:, :, :3].copy()
             mask = torch.tensor(
-                np.all(img[:, :, :3] <= [0.8, 0.8, 0.8], axis=-1)
+                np.all(img[:, :, :3] <= [0.98, 0.98, 0.98], axis=-1)
             ).unsqueeze(-1)
             img = cv2.resize(img, (self.frame_w, self.frame_h))
             img: Float[Tensor, "H W 3"] = torch.FloatTensor(img).to(self.rank)
@@ -189,6 +215,12 @@ class MultiviewIterableDataset(IterableDataset):
             self.frames_c2w, self.frames_proj
         )
         self.light_positions: Float[Tensor, "B 3"] = self.frames_position
+
+    def update_step(self, epoch: int, global_step: int, on_load_weights: bool = False):
+        if global_step == 1000:
+            self.cfg.train_downsample_resolution = 1
+            self.__init__(self.cfg)
+            pass
 
     def __iter__(self):
         while True:
@@ -412,7 +444,7 @@ class MultiviewDataModule(pl.LightningDataModule):
         if stage in [None, "fit"]:
             self.train_dataset = MultiviewIterableDataset(self.cfg)
         if stage in [None, "fit", "validate"]:
-            self.val_dataset = MultiviewDataset(self.cfg, "val")
+            self.val_dataset = RandomCameraDataset(self.cfg, "val")
         if stage in [None, "test", "predict"]:
             self.test_dataset = MultiviewDataset(self.cfg, "test")
 
