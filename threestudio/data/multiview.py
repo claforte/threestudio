@@ -91,8 +91,8 @@ class MultiviewsDataModuleConfig:
     light_position_perturb: float = 1.0
     light_distance_range: Tuple[float, float] = (0.8, 1.5)
     eval_elevation_deg: float = 0
-    eval_camera_distance: float = 2.2
-    eval_fovy_deg: float = 70.0
+    eval_camera_distance: float = 1.8
+    eval_fovy_deg: float = 33.9
     light_sample_strategy: str = "dreamfusion"
     batch_uniform_azimuth: bool = True
     progressive_until: int = 0  # progressive ranges for elevation, azimuth, r, fovy
@@ -146,6 +146,7 @@ class MultiviewIterableDataset(IterableDataset, Updateable):
             rot_z_vector = torch.mean(rot_z_vector, dim=0).unsqueeze(0)
             c2w_list[:, :3, 3] -= rot_z_vector[:, :, 0] * self.cfg.camera_distance
         elif self.cfg.camera_layout == "input":
+            self.cfg.eval_camera_distance = float(torch.linalg.norm(c2w_list[0, :3, 3]))
             pass  # no-op, use input poses
         else:
             raise ValueError(
@@ -217,7 +218,7 @@ class MultiviewIterableDataset(IterableDataset, Updateable):
         self.light_positions: Float[Tensor, "B 3"] = self.frames_position
 
     def update_step(self, epoch: int, global_step: int, on_load_weights: bool = False):
-        if global_step == 1000:
+        if global_step == 1200:
             self.cfg.train_downsample_resolution = 1
             self.__init__(self.cfg)
             pass

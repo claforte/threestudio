@@ -386,9 +386,7 @@ class Zero123(BaseLift3DSystem):
             name="validation_epoch_end",
             step=self.true_global_step,
         )
-        shutil.rmtree(
-            os.path.join(self.get_save_dir(), f"it{self.true_global_step}-val")
-        )
+        # shutil.rmtree(os.path.join(self.get_save_dir(), f"it{self.true_global_step}-val"))
 
     def test_step(self, batch, batch_idx):
         out = self(batch)
