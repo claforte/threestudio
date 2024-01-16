@@ -250,8 +250,8 @@ if __name__ == "__main__":
     # command = "--config ./configs/kplanes_refine_no_sds.yaml system.geometry_convert_from=outputs/sunflower/kplanes/ckpts/last.ckpt --train name=sunflower tag=kplanes2 use_timestamp=False data.dataroot=load/sunflower"
     # command = "--config ./configs/kplanes_refine_no_sds.yaml system.geometry_convert_from=outputs/chair/kplanes/ckpts/last-v16.ckpt --train name=chair tag=kplanes2 use_timestamp=False data.dataroot=load/chair"
 
-    # args, extras = parser.parse_known_args(command.split())
-    args, extras = parser.parse_known_args()
+    args, extras = parser.parse_known_args(command.split())
+    # args, extras = parser.parse_known_args()
 
     if args.gradio:
         # FIXME: no effect, stdout is not captured

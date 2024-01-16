@@ -4,7 +4,7 @@ import sys
 
 DATA_PATH = "/home/temp/multiview]"
 
-MODELS_PATH = ["SVD21_FT4", "SVD21_FTcontinue", "SVD21FT_backUCG", "SVDMV_25frame21FT"]
+MODELS_PATH = ["SVD21FT_backUCG", "SVD21_FT4", "SVD21_FTcontinue", "SVDMV_25frame21FT"]
 
 THREESTUDIO_PATH = "/home/kplanes2/"
 
@@ -27,7 +27,7 @@ for i in range(num_inputs):
     job_paths_final += job_paths[i::num_inputs]
 
 
-html_table = "<table>\n"
+html_table = '<table border="1">\n'
 
 for i in range(len(job_paths_final) // 2):
     html_table += "  <tr>\n"
@@ -36,7 +36,7 @@ for i in range(len(job_paths_final) // 2):
         input_name = os.path.basename(input_path)
 
         tag = os.path.basename(os.path.dirname(input_path))
-        html_table += f'    <td><video><source src="kplanes2/outputs/{input_name}/{tag}/save/it2000.mp4"></video></td>\n'
+        html_table += f'    <td>{tag}<video autoplay loop><source src="kplanes2/outputs/{input_name}/{tag}/save/it2000-val.mp4"></video></td>\n'
     html_table += "  </tr>\n"
 
 html_table += "</table>"
@@ -45,6 +45,7 @@ html_table += "</table>"
 with open("index.html", "w") as file:
     file.write(html_table)
 
+exit(0)
 
 for input_path in job_paths_final:
     print(input_path)

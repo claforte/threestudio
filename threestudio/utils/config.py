@@ -8,23 +8,31 @@ import threestudio
 from threestudio.utils.typing import *
 
 # ============ Register OmegaConf Recolvers ============= #
-OmegaConf.register_new_resolver(
-    "calc_exp_lr_decay_rate", lambda factor, n: factor ** (1.0 / n)
-)
-OmegaConf.register_new_resolver("add", lambda a, b: a + b)
-OmegaConf.register_new_resolver("sub", lambda a, b: a - b)
-OmegaConf.register_new_resolver("mul", lambda a, b: a * b)
-OmegaConf.register_new_resolver("div", lambda a, b: a / b)
-OmegaConf.register_new_resolver("idiv", lambda a, b: a // b)
-OmegaConf.register_new_resolver("basename", lambda p: os.path.basename(p))
-OmegaConf.register_new_resolver("rmspace", lambda s, sub: s.replace(" ", sub))
-OmegaConf.register_new_resolver("tuple2", lambda s: [float(s), float(s)])
-OmegaConf.register_new_resolver("gt0", lambda s: s > 0)
-OmegaConf.register_new_resolver("cmaxgt0", lambda s: C_max(s) > 0)
-OmegaConf.register_new_resolver("not", lambda s: not s)
-OmegaConf.register_new_resolver(
-    "cmaxgt0orcmaxgt0", lambda a, b: C_max(a) > 0 or C_max(b) > 0
-)
+if not OmegaConf.has_resolver("calc_exp_lr_decay_rate"):
+    OmegaConf.register_new_resolver(
+        "calc_exp_lr_decay_rate", lambda factor, n: factor ** (1.0 / n)
+    )
+
+if not OmegaConf.has_resolver("add"):
+    OmegaConf.register_new_resolver("add", lambda a, b: a + b)
+if not OmegaConf.has_resolver("sub"):
+    OmegaConf.register_new_resolver("sub", lambda a, b: a - b)
+if not OmegaConf.has_resolver("mul"):
+    OmegaConf.register_new_resolver("mul", lambda a, b: a * b)
+if not OmegaConf.has_resolver("div"):
+    OmegaConf.register_new_resolver("div", lambda a, b: a / b)
+if not OmegaConf.has_resolver("idiv"):
+    OmegaConf.register_new_resolver("idiv", lambda a, b: a // b)
+if not OmegaConf.has_resolver("basename"):
+    OmegaConf.register_new_resolver("basename", lambda p: os.path.basename(p))
+if not OmegaConf.has_resolver("rmspace"):
+    OmegaConf.register_new_resolver("rmspace", lambda s, sub: s.replace(" ", sub))
+if not OmegaConf.has_resolver("tuple2"):
+    OmegaConf.register_new_resolver("tuple2", lambda s: [float(s), float(s)])
+if not OmegaConf.has_resolver("gt0"):
+    OmegaConf.register_new_resolver("gt0", lambda s: s > 0)
+if not OmegaConf.has_resolver("not"):
+    OmegaConf.register_new_resolver("not", lambda s: not s)
 # ======================================================= #
 
 

@@ -58,8 +58,8 @@ system:
   renderer:
     radius: ${system.geometry.radius}
     num_samples_per_ray: 512
-    return_comp_normal: ${cmaxgt0:${system.loss.lambda_normal_smooth}}
-    return_normal_perturb: ${cmaxgt0:${system.loss.lambda_3d_normal_smooth}}
+    return_comp_normal: false
+    return_normal_perturb: false
     grid_prune: True
 
 
