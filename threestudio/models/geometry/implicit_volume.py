@@ -4,7 +4,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from line_profiler import profile
 
 import threestudio
 from threestudio.models.geometry.base import (
@@ -129,7 +128,6 @@ class ImplicitVolume(BaseImplicitGeometry):
         density = get_activation(self.cfg.density_activation)(raw_density)
         return raw_density, density
 
-    @profile
     def forward(
         self, points: Float[Tensor, "*N Di"], output_normal: bool = False
     ) -> Dict[str, Float[Tensor, "..."]]:
@@ -219,7 +217,6 @@ class ImplicitVolume(BaseImplicitGeometry):
         torch.set_grad_enabled(grad_enabled)
         return output
 
-    @profile
     def forward_density(self, points: Float[Tensor, "*N Di"]) -> Float[Tensor, "*N 1"]:
         points_unscaled = points
         points = contract_to_unisphere(points_unscaled, self.bbox, self.unbounded)

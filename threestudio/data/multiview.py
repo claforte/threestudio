@@ -65,6 +65,7 @@ class MultiviewsDataModuleConfig:
     dataroot: str = ""
     train_downsample_resolution: int = 4
     eval_downsample_resolution: int = 4
+    full_resolution_step: int = 1200
     train_data_interval: int = 1
     eval_data_interval: int = 1
     batch_size: int = 1
@@ -218,7 +219,7 @@ class MultiviewIterableDataset(IterableDataset, Updateable):
         self.light_positions: Float[Tensor, "B 3"] = self.frames_position
 
     def update_step(self, epoch: int, global_step: int, on_load_weights: bool = False):
-        if global_step == 1200:
+        if global_step == self.cfg.full_resolution_step:
             self.cfg.train_downsample_resolution = 1
             self.__init__(self.cfg)
             pass

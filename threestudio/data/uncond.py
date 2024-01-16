@@ -9,8 +9,6 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset, IterableDataset
 
-sys.path.append("/home/kplanes2")
-
 import threestudio
 from threestudio import register
 from threestudio.utils.base import Updateable
@@ -503,39 +501,3 @@ class RandomCameraDataModule(pl.LightningDataModule):
         return self.general_loader(
             self.test_dataset, batch_size=1, collate_fn=self.test_dataset.collate
         )
-
-
-if __name__ == "__main__":
-    cfg = {
-        "height": [64, 128, 256],
-        "width": [64, 128, 256],
-        "batch_size": [6, 3, 2],
-        "resolution_milestones": [200, 300],
-        "eval_height": 512,
-        "eval_width": 512,
-        "eval_batch_size": 1,
-        "n_val_views": 30,
-        "n_test_views": 120,
-        "elevation_range": [-10, 80],
-        "azimuth_range": [-180, 180],
-        "camera_distance_range": [3.8, 3.8],
-        "fovy_range": [20.0, 20.0],
-        "camera_perturb": 0.0,
-        "center_perturb": 0.0,
-        "up_perturb": 0.0,
-        "light_position_perturb": 1.0,
-        "light_distance_range": [7.5, 10.0],
-        "eval_elevation_deg": 5.0,
-        "eval_camera_distance": 3.8,
-        "eval_fovy_deg": 20.0,
-        "light_sample_strategy": "dreamfusion",
-        "batch_uniform_azimuth": False,
-        "progressive_until": 0,
-    }
-
-    data_module = RandomCameraDataModule(cfg)
-    data_module.setup("fit")
-    loader = iter(data_module.train_dataloader())
-
-    a = next(loader)
-    print(a)
