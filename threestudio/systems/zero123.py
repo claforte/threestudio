@@ -11,6 +11,7 @@ from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
 import threestudio
 from threestudio.systems.base import BaseLift3DSystem
+from threestudio.utils.misc import C, get_CPU_mem, get_GPU_mem
 from threestudio.utils.ops import binary_cross_entropy, dot
 from threestudio.utils.typing import *
 
@@ -33,7 +34,7 @@ class Zero123(BaseLift3DSystem):
         if len(self.cfg.guidance_type):
             self.guidance = threestudio.find(self.cfg.guidance_type)(self.cfg.guidance)
 
-        if self.C(self.cfg.loss.lambda_lpips) > 0:
+        if self.cfg.loss.lambda_lpips != 0:
             self.lpips = LearnedPerceptualImagePatchSimilarity(
                 net_type="vgg", normalize=True
             )
@@ -170,6 +171,10 @@ class Zero123(BaseLift3DSystem):
                     "normal",
                     1 - F.cosine_similarity(valid_pred_normal, valid_gt_normal).mean(),
                 )
+
+            self.log("train/mem_cpu", get_CPU_mem(), prog_bar=True)
+            self.log("train/mem_gpu", get_GPU_mem()[0], prog_bar=True)
+
         elif guidance == "zero123":
             # zero123
             guidance_out = self.guidance(
@@ -382,11 +387,13 @@ class Zero123(BaseLift3DSystem):
             filestem,
             "(\d+)\.png",
             save_format="mp4",
-            fps=5,
+            fps=14,
             name="validation_epoch_end",
             step=self.true_global_step,
         )
-        # shutil.rmtree(os.path.join(self.get_save_dir(), f"it{self.true_global_step}-val"))
+        shutil.rmtree(
+            os.path.join(self.get_save_dir(), f"it{self.true_global_step}-val")
+        )
 
     def test_step(self, batch, batch_idx):
         out = self(batch)

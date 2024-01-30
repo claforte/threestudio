@@ -299,7 +299,10 @@ class NeRFVolumeRenderer(VolumeRenderer):
 
         if self.training:
             geo_out = self.geometry(
-                positions, output_normal=self.material.requires_normal
+                positions,
+                output_normal=(
+                    self.material.requires_normal or self.cfg.return_comp_normal
+                ),
             )
             rgb_fg_all = self.material(
                 viewdirs=t_dirs,
@@ -314,7 +317,9 @@ class NeRFVolumeRenderer(VolumeRenderer):
                 self.geometry,
                 self.cfg.eval_chunk_size,
                 positions,
-                output_normal=self.material.requires_normal,
+                output_normal=(
+                    self.material.requires_normal or self.cfg.return_comp_normal
+                ),
             )
             rgb_fg_all = chunk_batch(
                 self.material,
@@ -417,7 +422,7 @@ class NeRFVolumeRenderer(VolumeRenderer):
                 if self.cfg.return_normal_perturb:
                     normal_perturb = self.geometry(
                         positions + torch.randn_like(positions) * 1e-2,
-                        output_normal=self.material.requires_normal,
+                        output_normal=True,
                     )["normal"]
                     out.update({"normal_perturb": normal_perturb})
         else:

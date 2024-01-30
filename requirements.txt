@@ -1,3 +1,4 @@
+torchvision
 lightning==2.0.0
 omegaconf==2.3.0
 jaxtyping
@@ -15,7 +16,7 @@ imageio[ffmpeg]
 git+https://github.com/NVlabs/nvdiffrast.git
 libigl
 xatlas
-trimesh[easy]
+trimesh
 networkx
 pysdf
 PyMCubes

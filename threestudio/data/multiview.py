@@ -19,7 +19,7 @@ from threestudio import register
 from threestudio.data.uncond import RandomCameraDataset
 from threestudio.utils.base import Updateable
 from threestudio.utils.config import parse_structured
-from threestudio.utils.misc import get_rank
+from threestudio.utils.misc import C, get_rank
 from threestudio.utils.ops import get_mvp_matrix, get_ray_directions, get_rays
 from threestudio.utils.typing import *
 
@@ -74,11 +74,11 @@ class MultiviewsDataModuleConfig:
     camera_distance: float = -1
     eval_interpolation: Optional[Tuple[int, int, int]] = None  # (0, 1, 30)
 
-    eval_height: int = 512
-    eval_width: int = 512
-    eval_batch_size: int = 1
-    n_val_views: int = 30
-    n_test_views: int = 120
+    eval_height: int = 576
+    eval_width: int = 576
+    n_views: int = 21
+    n_val_views: int = 21
+    n_test_views: int = 126
     elevation_range: Tuple[float, float] = (-10, 90)
     azimuth_range: Tuple[float, float] = (-180, 180)
     camera_distance_range: Tuple[float, float] = (1, 1.5)
@@ -106,6 +106,7 @@ class MultiviewIterableDataset(IterableDataset, Updateable):
 
         assert self.cfg.batch_size == 1
         scale = self.cfg.train_downsample_resolution
+        self.n_views = int(C(self.cfg.n_views, 0, 0))
 
         camera_dict = json.load(
             open(os.path.join(self.cfg.dataroot, "transforms.json"), "r")
@@ -171,7 +172,7 @@ class MultiviewIterableDataset(IterableDataset, Updateable):
             )
             img = rgba[:, :, :3].copy()
             mask = torch.tensor(
-                np.all(img[:, :, :3] <= [0.98, 0.98, 0.98], axis=-1)
+                np.any(img[:, :, :3] <= [0.99, 0.99, 0.99], axis=-1)
             ).unsqueeze(-1)
             img = cv2.resize(img, (self.frame_w, self.frame_h))
             img: Float[Tensor, "H W 3"] = torch.FloatTensor(img).to(self.rank)
@@ -224,23 +225,25 @@ class MultiviewIterableDataset(IterableDataset, Updateable):
             self.__init__(self.cfg)
             pass
 
+        self.n_views = int(C(self.cfg.n_views, epoch, global_step))
+
     def __iter__(self):
         while True:
             yield {}
 
     def collate(self, batch):
-        index = torch.randint(0, self.n_frames, (1,)).item()
+        index = torch.randint(0, self.n_frames, (self.n_views,))
         return {
             "index": index,
-            "rays_o": self.rays_o[index : index + 1],
-            "rays_d": self.rays_d[index : index + 1],
-            "mvp_mtx": self.mvp_mtx[index : index + 1],
-            "c2w": self.frames_c2w[index : index + 1],
-            "camera_positions": self.frames_position[index : index + 1],
-            "light_positions": self.light_positions[index : index + 1],
-            "gt_rgb": self.frames_img[index : index + 1],
-            "rgb": self.frames_img[index : index + 1],
-            "mask": self.frames_mask[index : index + 1],
+            "rays_o": self.rays_o[index],
+            "rays_d": self.rays_d[index],
+            "mvp_mtx": self.mvp_mtx[index],
+            "c2w": self.frames_c2w[index],
+            "camera_positions": self.frames_position[index],
+            "light_positions": self.light_positions[index],
+            "gt_rgb": self.frames_img[index],
+            "rgb": self.frames_img[index],
+            "mask": self.frames_mask[index],
             "height": self.frame_h,
             "width": self.frame_w,
         }
@@ -448,7 +451,7 @@ class MultiviewDataModule(pl.LightningDataModule):
         if stage in [None, "fit", "validate"]:
             self.val_dataset = RandomCameraDataset(self.cfg, "val")
         if stage in [None, "test", "predict"]:
-            self.test_dataset = MultiviewDataset(self.cfg, "test")
+            self.test_dataset = RandomCameraDataset(self.cfg, "test")
 
     def prepare_data(self):
         pass

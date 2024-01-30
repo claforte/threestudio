@@ -1,0 +1,113 @@
+name: "zero123"
+exp_root_dir: "outputs"
+seed: 0
+
+
+data_type: "multiview-camera-datamodule"
+data:
+  train_downsample_resolution: 2
+  eval_downsample_resolution: 1
+  full_resolution_step: 100
+  n_views: [99, 21, 6, 100]
+  dataroot: ???
+  camera_layout: "input"
+
+system_type: "zero123-system"
+system:
+  geometry_type: "implicit-volume"
+  geometry:
+    radius: 1
+
+    # the density initialization proposed in the DreamFusion paper
+    # does not work very well
+    # density_bias: "blob_dreamfusion"
+    # density_activation: exp
+    # density_blob_scale: 5.
+    # density_blob_std: 0.2
+
+    # use Magic3D density initialization instead
+    density_bias: "blob_magic3d"
+    density_activation: softplus
+    density_blob_scale: 10.
+    density_blob_std: 0.5
+    n_feature_dims: 16
+
+    pos_encoding_config:
+      otype: KPlanes
+      n_feature_count: 32
+      resolutions: [128,256,512]     # each entry N in this list creates K planes with resolution N x N.
+      n_dimensions: 3            # 3 => 3 planes per resolution, 4 => 6 planes per resolution
+    mlp_network_config:
+      otype: "VanillaMLP"
+      activation: "ReLU"
+      output_activation: "none"
+      n_neurons: 64
+      n_hidden_layers: 1
+
+  material_type: "neural-radiance-material"
+  material:
+    input_feature_dims: 16
+    dir_encoding_config:
+      otype: "SphericalHarmonics"
+      degree: 4
+
+  background_type: "solid-color-background"
+
+  renderer_type: "nerf-volume-renderer"
+  renderer:
+    radius: ${system.geometry.radius}
+    num_samples_per_ray: 512
+    return_comp_normal: False
+    return_normal_perturb: False
+    grid_prune: True
+
+
+  prompt_processor_type: "dummy-prompt-processor" # Zero123 doesn't use prompts
+  prompt_processor:
+    pretrained_model_name_or_path: ""
+    prompt: ""
+
+  rays_divisor_power: 2
+  ambient_ratio_min: [0, 0.1, 0.5, 400, 0.9, 401]
+
+  loggers:
+    wandb:
+      enable: false
+      project: "threestudio"
+      name: None
+
+  loss:
+    lambda_sds: 0.
+    lambda_rgb: 1000.
+    lambda_mask: 50.
+    lambda_depth: 0. # 0.05
+    lambda_depth_rel: 0. # [0, 0, 0.05, 100]
+    lambda_normal: 0. # [0, 0, 0.05, 100]
+    lambda_normal_smooth: 0
+    lambda_3d_normal_smooth: 0
+    lambda_orient: 0.0
+    lambda_sparsity: 0 # should be tweaked for every model
+    lambda_opaque: 0
+    lambda_l1_regularization: 0
+    lambda_total_variation: 0
+    lambda_lpips: [100, 0., 500., 300]
+
+  optimizer:
+    name: Adam
+    args:
+      lr: 0.01
+      betas: [0.9, 0.99]
+      eps: 1.e-8
+
+trainer:
+  max_steps: 500
+  log_every_n_steps: 1
+  num_sanity_val_steps: 0
+  val_check_interval: 100
+  enable_progress_bar: true
+  precision: 32
+
+checkpoint:
+  save_last: true # save at each validation time
+  save_top_k: -1
+  every_n_train_steps: ${trainer.max_steps}

@@ -346,11 +346,11 @@ class RandomCameraDataset(Dataset):
             self.n_views = self.cfg.n_test_views
 
         azimuth_deg: Float[Tensor, "B"]
-        if self.split == "val":
-            # make sure the first and last view are not the same
-            azimuth_deg = torch.linspace(0, 360.0, self.n_views + 1)[: self.n_views]
-        else:
-            azimuth_deg = torch.linspace(0, 360.0, self.n_views)
+        # if self.split == "val":
+        # make sure the first and last view are not the same
+        azimuth_deg = torch.linspace(0, 360.0, self.n_views + 1)[: self.n_views]
+        # else:
+        #     azimuth_deg = torch.linspace(0, 360.0, self.n_views)
         elevation_deg: Float[Tensor, "B"] = torch.full_like(
             azimuth_deg, self.cfg.eval_elevation_deg
         )
