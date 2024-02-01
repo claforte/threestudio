@@ -2,7 +2,7 @@ import json
 import math
 import os
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import cv2
 import numpy as np
@@ -16,6 +16,10 @@ from tqdm import tqdm
 
 import threestudio
 from threestudio import register
+from threestudio.data.svd_uncond import (
+   SVDCameraDataModuleConfig,
+   SVDCameraIterableDataset,
+)
 from threestudio.data.uncond import RandomCameraDataset
 from threestudio.utils.base import Updateable
 from threestudio.utils.config import parse_structured
@@ -97,6 +101,9 @@ class MultiviewsDataModuleConfig:
     light_sample_strategy: str = "dreamfusion"
     batch_uniform_azimuth: bool = True
     progressive_until: int = 0  # progressive ranges for elevation, azimuth, r, fovy
+
+    use_random_camera: bool = True
+    random_camera: dict = field(default_factory=dict)
 
 
 class MultiviewIterableDataset(IterableDataset, Updateable):
@@ -219,9 +226,16 @@ class MultiviewIterableDataset(IterableDataset, Updateable):
         )
         self.light_positions: Float[Tensor, "B 3"] = self.frames_position
 
+        if self.cfg.use_random_camera:
+            random_camera_cfg = parse_structured(
+                SVDCameraDataModuleConfig, self.cfg.get("random_camera", {})
+            )
+            self.random_pose_generator = SVDCameraIterableDataset(random_camera_cfg)
+
     def update_step(self, epoch: int, global_step: int, on_load_weights: bool = False):
+        self.random_pose_generator.update_step(epoch, global_step, on_load_weights)
         if global_step == self.cfg.full_resolution_step:
-            self.cfg.train_downsample_resolution = 1
+            self.cfg.train_downsample_resolution = 1 # 1
             self.__init__(self.cfg)
             pass
 
@@ -233,7 +247,8 @@ class MultiviewIterableDataset(IterableDataset, Updateable):
 
     def collate(self, batch):
         index = torch.randint(0, self.n_frames, (self.n_views,))
-        return {
+        # index = torch.arange(self.n_views).long()
+        batch = {
             "index": index,
             "rays_o": self.rays_o[index],
             "rays_d": self.rays_d[index],
@@ -247,6 +262,10 @@ class MultiviewIterableDataset(IterableDataset, Updateable):
             "height": self.frame_h,
             "width": self.frame_w,
         }
+        if self.cfg.use_random_camera:
+            batch["random_camera"] = self.random_pose_generator.collate(None)
+
+        return batch
 
     def get_all_images(self):
         return self.frames_img

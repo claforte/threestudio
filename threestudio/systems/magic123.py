@@ -59,18 +59,20 @@ class Magic123(BaseLift3DSystem):
             )
 
     def training_step(self, batch, batch_idx):
+        # import pdb; pdb.set_trace()
         out_input = self(batch)
         if "random_camera" in batch:
-            out = self(batch["random_camera"])
-        else:
-            out = self(batch)
+            out2 = self(batch["random_camera"])
+        # else:
+        #     out = self(batch)
+        out = self(batch)
 
         if len(self.cfg.prompt_processor_type):
             prompt_utils = self.prompt_processor()
         if len(self.cfg.guidance_type):
             guidance_out = self.guidance(
-                out["comp_rgb"],
-                prompt_utils,
+                out2["comp_rgb"],
+                # prompt_utils,
                 **batch["random_camera"],
                 rgb_as_latents=False,
             )

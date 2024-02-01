@@ -33,6 +33,7 @@ class Zero123(BaseLift3DSystem):
         super().configure()
         if len(self.cfg.guidance_type):
             self.guidance = threestudio.find(self.cfg.guidance_type)(self.cfg.guidance)
+            self.guidance.device = torch.device("cuda:1")
 
         if self.cfg.loss.lambda_lpips != 0:
             self.lpips = LearnedPerceptualImagePatchSimilarity(
@@ -179,7 +180,7 @@ class Zero123(BaseLift3DSystem):
             # zero123
             guidance_out = self.guidance(
                 out["comp_rgb"],
-                **batch,
+                # **batch,
                 rgb_as_latents=False,
                 guidance_eval=guidance_eval,
             )
@@ -277,6 +278,7 @@ class Zero123(BaseLift3DSystem):
         Args:
             guidance: one of "ref" (reference image supervision), "zero123"
         """
+        # import pdb; pdb.set_trace()
         if guidance == "ref":
             # bg_color = torch.rand_like(batch['rays_o'])
             ambient_ratio = 1.0
@@ -303,7 +305,22 @@ class Zero123(BaseLift3DSystem):
         batch["bg_color"] = None
         batch["ambient_ratio"] = ambient_ratio
 
-        out = self(batch)
+        if guidance == "ref":
+            out = self(batch)
+        elif guidance == "zero123":
+            # self.renderer.to(self.guidance.device)
+            # for _, v in batch.items():
+            #     if torch.is_tensor(v):
+            #         v = v.to(self.guidance.device)
+            out = self(batch)
+            # for _, v in out.items():
+            #     if torch.is_tensor(v):
+            #         v = v.to(self.device)
+            # for _, v in batch.items():
+            #     if torch.is_tensor(v):
+            #         v = v.to(self.device)
+            # self.renderer.to(self.device)
+
         return self.compute_loss(
             out, guidance, batch, rays_divisor, offset_x_tensor, offset_y_tensor
         )
@@ -311,8 +328,10 @@ class Zero123(BaseLift3DSystem):
     def training_step(self, batch, batch_idx):
         total_loss = 0.0
 
+        # import pdb; pdb.set_trace()
+
         # ZERO123
-        if self.cfg.guidance_type == "zero123-guidance":
+        if self.cfg.guidance_type == "svd-guidance" and self.C(self.cfg.loss.lambda_sds) > 0:
             out = self.training_substep(batch, batch_idx, guidance="zero123")
             total_loss += out["loss"]
 

@@ -311,6 +311,7 @@ class TetrahedraSDFGrid(BaseExplicitGeometry):
             instance.sdf.data = (
                 mesh.extras["grid_level"].to(instance.sdf.data).clamp(-1, 1)
             )
+            # import pdb; pdb.set_trace()
             if not instance.cfg.geometry_only and copy_net:
                 instance.encoding.load_state_dict(other.encoding.state_dict())
                 instance.feature_network.load_state_dict(
