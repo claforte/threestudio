@@ -3,6 +3,7 @@ import math
 import random
 from dataclasses import dataclass, field
 
+import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
@@ -21,6 +22,81 @@ from threestudio.utils.ops import (
     get_rays,
 )
 from threestudio.utils.typing import *
+
+
+def smooth_data(data, window_size):
+    # Extend data at both ends by wrapping around to create a continuous loop
+    pad_size = window_size
+    padded_data = np.concatenate((data[-pad_size:], data, data[:pad_size]))
+
+    # Apply smoothing
+    kernel = np.ones(window_size) / window_size
+    smoothed_data = np.convolve(padded_data, kernel, mode="same")
+
+    # Extract the smoothed data corresponding to the original sequence
+    # Adjust the indices to account for the larger padding
+    start_index = pad_size
+    end_index = -pad_size if pad_size != 0 else None
+    smoothed_original_data = smoothed_data[start_index:end_index]
+
+    return smoothed_original_data
+
+
+def generate_drunk_cycle_xy_values(
+    length=84,
+    num_components=84,
+    frequency_range=(1, 5),
+    amplitude_range=(0.5, 10),
+    step_range=(0, 2),
+):
+    # Y values generation
+    y_sequence = np.zeros(length)
+    for _ in range(num_components):
+        # Choose a frequency that will complete whole cycles in the sequence
+        frequency = np.random.randint(*frequency_range) * (2 * np.pi / length)
+        amplitude = np.random.uniform(*amplitude_range)
+        phase_shift = np.random.uniform(0, 2 * np.pi)
+        angles = (
+            np.linspace(0, frequency * length, length, endpoint=False) + phase_shift
+        )
+        y_sequence += np.sin(angles) * amplitude
+
+    # X values generation
+    # Generate length - 1 steps since the last step is back to start
+    steps = np.random.uniform(*step_range, length - 1)
+    total_step_sum = np.sum(steps)
+
+    # Calculate the scale factor to scale total steps to just under 360
+    scale_factor = (
+        360 - ((360 / length) * np.random.uniform(*step_range))
+    ) / total_step_sum
+
+    # Apply the scale factor and generate the sequence of X values
+    x_values = np.cumsum(steps * scale_factor)
+
+    # Ensure the sequence starts at 0 and add the final step to complete the loop
+    x_values = np.insert(x_values, 0, 0)
+
+    return x_values, y_sequence
+
+
+def generate_and_process_drunk_cycle_orbit_data(length=21):
+    while True:
+        # Generate the combined X and Y values using the new function
+        x_values, y_values = generate_drunk_cycle_xy_values(length=length)
+
+        # Smooth the Y values directly
+        smoothed_y_values = smooth_data(y_values, 5)
+
+        max_magnitude = np.max(np.abs(smoothed_y_values))
+        if max_magnitude < 90:
+            break
+
+    # Smooth the X values using deltas
+    # smoothed_x_values = smooth_deltas(x_values, 5)
+    smoothed_x_values = x_values
+
+    return smoothed_x_values, smoothed_y_values
 
 
 @dataclass
@@ -183,6 +259,41 @@ class SVDCameraIterableDataset(IterableDataset, Updateable):
         self.elevation_deg, self.azimuth_deg = elevation_deg, azimuth_deg
         self.camera_distances = camera_distances
 
+    def update_step_sober(
+        self, epoch: int, global_step: int, on_load_weights: bool = False
+    ):
+        size_ind = bisect.bisect_right(self.resolution_milestones, global_step) - 1
+        self.height = self.heights[size_ind]
+        self.width = self.widths[size_ind]
+        self.batch_size = self.batch_sizes[size_ind]
+        self.directions_unit_focal = self.directions_unit_focals[size_ind]
+        threestudio.debug(
+            f"Training height: {self.height}, width: {self.width}, batch_size: {self.batch_size}"
+        )
+
+        # get directions by dividing directions_unit_focal by focal length
+        focal_length: Float[Tensor, "B"] = (
+            0.5 * self.height / torch.tan(0.5 * self.fovy)
+        )
+        # directions_unit_focal = get_ray_directions(
+        #     H=self.height, W=self.width, focal=1.0
+        # )
+        directions: Float[Tensor, "B H W 3"] = self.directions_unit_focal[
+            None, :, :, :
+        ].repeat(self.n_views, 1, 1, 1)
+        directions[:, :, :, :2] = (
+            directions[:, :, :, :2] / focal_length[:, None, None, None]
+        )
+
+        rays_o, rays_d = get_rays(directions, self.c2w, keepdim=True)
+        proj_mtx: Float[Tensor, "B 4 4"] = get_projection_matrix(
+            self.fovy, self.width / self.height, 0.1, 1000.0
+        )  # FIXME: hard-coded near and far
+        mvp_mtx: Float[Tensor, "B 4 4"] = get_mvp_matrix(self.c2w, proj_mtx)
+
+        self.rays_o, self.rays_d = rays_o, rays_d
+        self.mvp_mtx = mvp_mtx
+
     def update_step(self, epoch: int, global_step: int, on_load_weights: bool = False):
         size_ind = bisect.bisect_right(self.resolution_milestones, global_step) - 1
         self.height = self.heights[size_ind]
@@ -206,6 +317,55 @@ class SVDCameraIterableDataset(IterableDataset, Updateable):
         directions[:, :, :, :2] = (
             directions[:, :, :, :2] / focal_length[:, None, None, None]
         )
+
+        azimuth_deg, elevation_deg = generate_and_process_drunk_cycle_orbit_data(
+            length=self.batch_size
+        )
+        azimuth_deg = torch.from_numpy(azimuth_deg).to(torch.float32)
+        elevation_deg = torch.from_numpy(elevation_deg).to(torch.float32)
+
+        elevation = elevation_deg * math.pi / 180
+        azimuth = azimuth_deg * math.pi / 180
+
+        # convert spherical coordinates to cartesian coordinates
+        # right hand coordinate system, x back, y right, z up
+        # elevation in (-90, 90), azimuth from +x to +y in (-180, 180)
+        camera_positions: Float[Tensor, "B 3"] = torch.stack(
+            [
+                self.camera_distances * torch.cos(elevation) * torch.cos(azimuth),
+                self.camera_distances * torch.cos(elevation) * torch.sin(azimuth),
+                self.camera_distances * torch.sin(elevation),
+            ],
+            dim=-1,
+        )
+
+        # default scene center at origin
+        center = torch.zeros_like(camera_positions)
+        # default camera up direction as +z
+        up = torch.as_tensor([0, 0, 1], dtype=torch.float32)[None, :].repeat(
+            self.n_views, 1
+        )
+
+        # light position is always at front camera
+        light_positions = camera_positions[-1].repeat(len(camera_positions), 1)
+
+        lookat: Float[Tensor, "B 3"] = F.normalize(center - camera_positions, dim=-1)
+        right: Float[Tensor, "B 3"] = F.normalize(torch.cross(lookat, up), dim=-1)
+        up = F.normalize(torch.cross(right, lookat), dim=-1)
+        c2w3x4: Float[Tensor, "B 3 4"] = torch.cat(
+            [torch.stack([right, up, -lookat], dim=-1), camera_positions[:, :, None]],
+            dim=-1,
+        )
+        c2w: Float[Tensor, "B 4 4"] = torch.cat(
+            [c2w3x4, torch.zeros_like(c2w3x4[:, :1])], dim=1
+        )
+        c2w[:, 3, 3] = 1.0
+
+        self.c2w = c2w
+        self.camera_positions = camera_positions
+        self.light_positions = light_positions
+        self.elevation, self.azimuth = elevation, azimuth
+        self.elevation_deg, self.azimuth_deg = elevation_deg, azimuth_deg
 
         rays_o, rays_d = get_rays(directions, self.c2w, keepdim=True)
         proj_mtx: Float[Tensor, "B 4 4"] = get_projection_matrix(

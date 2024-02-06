@@ -33,7 +33,7 @@ data:
     light_position_perturb: 1.0
     light_distance_range: [7.5, 10.0]
     eval_elevation_deg: 5.0 # ${data.default_elevation_deg}
-    eval_camera_distance: 3.5 # ${data.default_camera_distance}
+    eval_camera_distance: 2.0 # 3.5 # ${data.default_camera_distance}
     eval_fovy_deg: 33.9 # 20.0 # ${data.default_fovy_deg}
     light_sample_strategy: "dreamfusion"
     batch_uniform_azimuth: False

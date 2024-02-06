@@ -129,7 +129,7 @@ def generate_and_process_drunk_cycle_orbit_data(length=21):
     # smoothed_x_values = smooth_deltas(x_values, 5)
     smoothed_x_values = x_values
 
-    return x_values, y_values, smoothed_x_values, smoothed_y_values
+    return smoothed_x_values, smoothed_y_values
 
 
 @threestudio.register("svd-guidance")
@@ -230,6 +230,8 @@ class StableVideoDiffusionGuidance(BaseObject):
     def __call__(
         self,
         rgb: Float[Tensor, "B H W C"],
+        elevation: Float[Tensor, "B"],
+        azimuth: Float[Tensor, "B"],
         **kwargs,
     ):
         # import pdb; pdb.set_trace()
@@ -258,12 +260,14 @@ class StableVideoDiffusionGuidance(BaseObject):
         latents = latents.type_as(rgb)
         # check drunk orbit generation here:
         # https://github.com/Stability-AI/reve/blob/7708534bae0ce2ea376a678c5269ff0727655208/scripts/blender/blender_script.py#L1178
-        _, _, azimuth_deg, elev_deg = generate_and_process_drunk_cycle_orbit_data(
-            length=21
-        )
-        azimuth_deg = (
-            -90 + random.uniform(-180, 180) + azimuth_deg
-        )  # Remember that -90 is front.
+        # azimuth_deg, elev_deg = generate_and_process_drunk_cycle_orbit_data(
+        #     length=21
+        # )
+        # azimuth_deg = (
+        #     -90 + random.uniform(-180, 180) + azimuth_deg
+        # )  # Remember that -90 is front.
+        azimuth_deg = azimuth.cpu().numpy()
+        elev_deg = elevation.cpu().numpy()
 
         with torch.no_grad():
             rgb_pred = self.model(

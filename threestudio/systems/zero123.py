@@ -181,6 +181,8 @@ class Zero123(BaseLift3DSystem):
             guidance_out = self.guidance(
                 out["comp_rgb"],
                 # **batch,
+                batch["elevation"],
+                batch["azimuth"],
                 rgb_as_latents=False,
                 guidance_eval=guidance_eval,
             )
@@ -278,7 +280,7 @@ class Zero123(BaseLift3DSystem):
         Args:
             guidance: one of "ref" (reference image supervision), "zero123"
         """
-        # import pdb pdb.set_trace()
+        # import pdb; pdb.set_trace()
         if guidance == "ref":
             # bg_color = torch.rand_like(batch['rays_o'])
             ambient_ratio = 1.0
