@@ -414,60 +414,82 @@ class Zero123(BaseLift3DSystem):
             os.path.join(self.get_save_dir(), f"it{self.true_global_step}-val")
         )
 
+    # def test_step(self, batch, batch_idx):
+    #     out = self(batch)
+    #     self.save_image_grid(
+    #         f"it{self.true_global_step}-test/{batch['index'][0]}.png",
+    #         [
+    #             {
+    #                 "type": "rgb",
+    #                 "img": out["comp_rgb"][0],
+    #                 "kwargs": {"data_format": "HWC"},
+    #             },
+    #         ]
+    #         + (
+    #             [
+    #                 {
+    #                     "type": "rgb",
+    #                     "img": out["comp_normal"][0],
+    #                     "kwargs": {"data_format": "HWC", "data_range": (0, 1)},
+    #                 }
+    #             ]
+    #             if "comp_normal" in out
+    #             else []
+    #         )
+    #         + (
+    #             [
+    #                 {
+    #                     "type": "grayscale",
+    #                     "img": out["depth"][0],
+    #                     "kwargs": {},
+    #                 }
+    #             ]
+    #             if "depth" in out
+    #             else []
+    #         )
+    #         + [
+    #             {
+    #                 "type": "grayscale",
+    #                 "img": out["opacity"][0, :, :, 0],
+    #                 "kwargs": {"cmap": None, "data_range": (0, 1)},
+    #             },
+    #         ],
+    #         name="test_step",
+    #         step=self.true_global_step,
+    #     )
+        
     def test_step(self, batch, batch_idx):
         out = self(batch)
         self.save_image_grid(
-            f"it{self.true_global_step}-test/{batch['index'][0]}.png",
+            f"rgb/{batch['index'][0]}.png",
             [
                 {
                     "type": "rgb",
                     "img": out["comp_rgb"][0],
                     "kwargs": {"data_format": "HWC"},
                 },
-            ]
-            + (
-                [
-                    {
-                        "type": "rgb",
-                        "img": out["comp_normal"][0],
-                        "kwargs": {"data_format": "HWC", "data_range": (0, 1)},
-                    }
-                ]
-                if "comp_normal" in out
-                else []
-            )
-            + (
-                [
-                    {
-                        "type": "grayscale",
-                        "img": out["depth"][0],
-                        "kwargs": {},
-                    }
-                ]
-                if "depth" in out
-                else []
-            )
-            + [
-                {
-                    "type": "grayscale",
-                    "img": out["opacity"][0, :, :, 0],
-                    "kwargs": {"cmap": None, "data_range": (0, 1)},
-                },
             ],
-            name="test_step",
-            step=self.true_global_step,
         )
 
+    # def on_test_epoch_end(self):
+    #     self.save_img_sequence(
+    #         f"it{self.true_global_step}-test",
+    #         f"it{self.true_global_step}-test",
+    #         "(\d+)\.png",
+    #         save_format="mp4",
+    #         fps=30,
+    #         name="test",
+    #         step=self.true_global_step,
+    #     )
+    #     shutil.rmtree(
+    #         os.path.join(self.get_save_dir(), f"it{self.true_global_step}-test")
+    #     )
+        
     def on_test_epoch_end(self):
         self.save_img_sequence(
-            f"it{self.true_global_step}-test",
-            f"it{self.true_global_step}-test",
+            f"test",
+            f"rgb",
             "(\d+)\.png",
             save_format="mp4",
             fps=30,
-            name="test",
-            step=self.true_global_step,
-        )
-        shutil.rmtree(
-            os.path.join(self.get_save_dir(), f"it{self.true_global_step}-test")
         )

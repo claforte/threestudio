@@ -1,7 +1,11 @@
 import bisect
 import math
 import random
+import os
 import sys
+import glob
+import json
+import numpy as np
 from dataclasses import dataclass, field
 
 import pytorch_lightning as pl
@@ -35,7 +39,7 @@ class RandomCameraDataModuleConfig:
     eval_width: int = 512
     eval_batch_size: int = 1
     n_val_views: int = 1
-    n_test_views: int = 120
+    n_test_views: int = 21 # 120
     elevation_range: Tuple[float, float] = (-10, 90)
     azimuth_range: Tuple[float, float] = (-180, 180)
     camera_distance_range: Tuple[float, float] = (1, 1.5)
@@ -54,6 +58,9 @@ class RandomCameraDataModuleConfig:
     light_sample_strategy: str = "dreamfusion"
     batch_uniform_azimuth: bool = True
     progressive_until: int = 0  # progressive ranges for elevation, azimuth, r, fovy
+
+    use_gt_orbit: bool = True
+    gt_orbit: str = ""
 
 
 class RandomCameraIterableDataset(IterableDataset, Updateable):
@@ -345,21 +352,41 @@ class RandomCameraDataset(Dataset):
         else:
             self.n_views = self.cfg.n_test_views
 
-        azimuth_deg: Float[Tensor, "B"]
-        # if self.split == "val":
-        # make sure the first and last view are not the same
-        azimuth_deg = torch.linspace(0, 360.0, self.n_views + 1)[: self.n_views]
-        # else:
-        #     azimuth_deg = torch.linspace(0, 360.0, self.n_views)
-        elevation_deg: Float[Tensor, "B"] = torch.full_like(
-            azimuth_deg, self.cfg.eval_elevation_deg
-        )
-        camera_distances: Float[Tensor, "B"] = torch.full_like(
-            elevation_deg, self.cfg.eval_camera_distance
-        )
+        if self.cfg.use_gt_orbit:
+            orbit_files = sorted(glob.glob(os.path.join(self.cfg.gt_orbit, "frame_*.json")))
+            elevations = []
+            azimuths = []
+            camera_distances = []
+            for orb in orbit_files:
+                d = json.load(open(orb, "r"))
+                elevations.append(math.pi/2. - d["polar"])
+                azimuths.append(d["azimuth"])
+                camera_distances.append(d["camera_dist"])
 
-        elevation = elevation_deg * math.pi / 180
-        azimuth = azimuth_deg * math.pi / 180
+            elevation = torch.tensor(elevations).float()
+            azimuth = torch.tensor(azimuths).float()
+            azimuth += math.pi * 2 / self.n_views # - azimuth[-1]
+            camera_distances = torch.tensor(camera_distances).float()
+
+            elevation_deg = elevation * 180 / math.pi
+            azimuth_deg = azimuth * 180 / math.pi
+
+        else:
+            azimuth_deg: Float[Tensor, "B"]
+            # if self.split == "val":
+            # make sure the first and last view are not the same
+            azimuth_deg = torch.linspace(0, 360.0, self.n_views + 1)[1:] # [: self.n_views]
+            # else:
+            #     azimuth_deg = torch.linspace(0, 360.0, self.n_views)
+            elevation_deg: Float[Tensor, "B"] = torch.full_like(
+                azimuth_deg, self.cfg.eval_elevation_deg
+            )
+            camera_distances: Float[Tensor, "B"] = torch.full_like(
+                elevation_deg, self.cfg.eval_camera_distance
+            )
+
+            elevation = elevation_deg * math.pi / 180
+            azimuth = azimuth_deg * math.pi / 180
 
         # convert spherical coordinates to cartesian coordinates
         # right hand coordinate system, x back, y right, z up

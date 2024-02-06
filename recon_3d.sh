@@ -1,0 +1,6 @@
+for dir in ../GSO_sober21/*/; do (CUDA_VISIBLE_DEVICES=1 python ./launch.py --config=./configs/kplanes_no_sds_CHUNHAN.yaml --train use_timestamp=False system.loggers.wandb.enable=False system.loggers.wandb.project=dummy system.loggers.wandb.name=dummy data.dataroot="$dir" name="GSO_recon_uc_2000" tag="$(basename -- $dir)" data.gt_orbit="/weka/home-vikram/DATASETS/GSO_sober21/$(basename -- $dir)"); done
+for dir in ../GSO_sober21/*/; do (CUDA_VISIBLE_DEVICES=1 python ./launch.py --config=./configs/kplanes_no_sds_CHUNHAN.yaml --train use_timestamp=False system.loggers.wandb.enable=False system.loggers.wandb.project=dummy system.loggers.wandb.name=dummy data.dataroot="$dir" name="GSO_recon_uc_drunk_2000" tag="$(basename -- $dir)" data.gt_orbit="/weka/home-vikram/DATASETS/GSO_drunk21/$(basename -- $dir)"); done
+
+cd /weka/home-chunhanyao/stable-research
+CUDA_VISIBLE_DEVICES=1 python scripts/threeD_diffusion/metrics_img2vid.py --main_gt_dir="/weka/home-vikram/DATASETS/GSO_sober21" --main_pr_dir="/weka/home-chunhanyao/threestudio/outputs/GSO_recon_uc_2000"
+CUDA_VISIBLE_DEVICES=1 python scripts/threeD_diffusion/metrics_img2vid.py --main_gt_dir="/weka/home-vikram/DATASETS/GSO_drunk21" --main_pr_dir="/weka/home-chunhanyao/threestudio/outputs/GSO_recon_uc_drunk_2000"

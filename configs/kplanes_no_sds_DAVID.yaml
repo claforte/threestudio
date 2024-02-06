@@ -7,9 +7,11 @@ data_type: "multiview-camera-datamodule"
 data:
   train_downsample_resolution: 8
   eval_downsample_resolution: 1
+  n_views: 1
   dataroot: ???
   camera_layout: "input"
-  n_views: 1
+  use_gt_orbit: True
+  gt_orbit: "/weka/home-vikram/DATASETS/GSO_sober21/"
 
 system_type: "zero123-system"
 system:

@@ -11,6 +11,8 @@ data:
   n_views: [99, 21, 6, 100]
   dataroot: ???
   camera_layout: "input"
+  use_gt_orbit: True
+  gt_orbit: "/weka/home-vikram/DATASETS/GSO_sober21/"
 
 system_type: "zero123-system"
 system:
@@ -103,7 +105,7 @@ trainer:
   max_steps: 500
   log_every_n_steps: 1
   num_sanity_val_steps: 0
-  val_check_interval: 100
+  val_check_interval: 600
   enable_progress_bar: true
   precision: 32
 

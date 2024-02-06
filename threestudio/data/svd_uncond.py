@@ -39,8 +39,8 @@ class SVDCameraDataModuleConfig:
    eval_width: int = 512
    eval_batch_size: int = 1
    n_train_views: int = 21
-   n_val_views: int = 30
-   n_test_views: int = 120
+   n_val_views: int = 21 # 30
+   n_test_views: int = 21 # 120
    elevation_range: Tuple[float, float] = (-10, 90)
    azimuth_range: Tuple[float, float] = (-180, 180)
    camera_distance_range: Tuple[float, float] = (1, 1.5)

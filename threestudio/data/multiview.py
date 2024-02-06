@@ -82,7 +82,7 @@ class MultiviewsDataModuleConfig:
     eval_width: int = 576
     n_views: int = 21
     n_val_views: int = 21
-    n_test_views: int = 126
+    n_test_views: int = 21 # 126
     elevation_range: Tuple[float, float] = (-10, 90)
     azimuth_range: Tuple[float, float] = (-180, 180)
     camera_distance_range: Tuple[float, float] = (1, 1.5)
@@ -95,14 +95,16 @@ class MultiviewsDataModuleConfig:
     up_perturb: float = 0.02
     light_position_perturb: float = 1.0
     light_distance_range: Tuple[float, float] = (0.8, 1.5)
-    eval_elevation_deg: float = 0
-    eval_camera_distance: float = 1.8
+    eval_elevation_deg: float = 5. # 0
+    eval_camera_distance: float = 2.0 # 1.8
     eval_fovy_deg: float = 33.9
     light_sample_strategy: str = "dreamfusion"
     batch_uniform_azimuth: bool = True
     progressive_until: int = 0  # progressive ranges for elevation, azimuth, r, fovy
 
-    use_random_camera: bool = True
+    use_gt_orbit: bool = True
+    gt_orbit: str = ""
+    use_random_camera: bool = False
     random_camera: dict = field(default_factory=dict)
 
 
@@ -233,7 +235,8 @@ class MultiviewIterableDataset(IterableDataset, Updateable):
             self.random_pose_generator = SVDCameraIterableDataset(random_camera_cfg)
 
     def update_step(self, epoch: int, global_step: int, on_load_weights: bool = False):
-        self.random_pose_generator.update_step(epoch, global_step, on_load_weights)
+        if self.cfg.use_random_camera:
+            self.random_pose_generator.update_step(epoch, global_step, on_load_weights)
         if global_step == self.cfg.full_resolution_step:
             self.cfg.train_downsample_resolution = 1 # 1
             self.__init__(self.cfg)
@@ -247,7 +250,6 @@ class MultiviewIterableDataset(IterableDataset, Updateable):
 
     def collate(self, batch):
         index = torch.randint(0, self.n_frames, (self.n_views,))
-        # index = torch.arange(self.n_views).long()
         batch = {
             "index": index,
             "rays_o": self.rays_o[index],
