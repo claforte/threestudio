@@ -178,7 +178,7 @@ for ((i=$START_ROW; i<=$END_ROW; i++)); do
                 echo "Warning: No mesh 'it*-export' directories found for ${NAME}. Skipping this iteration."
                 continue
             fi
-            
+
             echo "GREATEST_EXPORT_DIR: ${GREATEST_EXPORT_DIR}"
 
             # Path to the output .mtl file

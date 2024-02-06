@@ -1,20 +1,21 @@
 import importlib
 import os
+import random
 from dataclasses import dataclass
 
 import cv2
 import imageio
-import random
 import numpy as np
-import threestudio
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as TT
+from tqdm import tqdm
+
+import threestudio
 from threestudio.utils.base import BaseObject
 from threestudio.utils.misc import C, get_CPU_mem, get_GPU_mem
 from threestudio.utils.typing import *
-from tqdm import tqdm
 
 
 def get_resizing_factor(
@@ -49,7 +50,9 @@ def resize_like(x, ref):
     resize_size = [int(np.ceil(rfs * s)) for s in (h, w)]
     top = (resize_size[0] - H) // 2
     left = (resize_size[1] - W) // 2
-    x = torch.nn.functional.interpolate(x, resize_size, mode="bilinear", antialias=False)
+    x = torch.nn.functional.interpolate(
+        x, resize_size, mode="bilinear", antialias=False
+    )
     x = TT.functional.crop(x, top=top, left=left, height=H, width=W)
     return x
 
@@ -61,7 +64,7 @@ def smooth_data(data, window_size):
 
     # Apply smoothing
     kernel = np.ones(window_size) / window_size
-    smoothed_data = np.convolve(padded_data, kernel, mode='same')
+    smoothed_data = np.convolve(padded_data, kernel, mode="same")
 
     # Extract the smoothed data corresponding to the original sequence
     # Adjust the indices to account for the larger padding
@@ -72,7 +75,13 @@ def smooth_data(data, window_size):
     return smoothed_original_data
 
 
-def generate_drunk_cycle_xy_values(length=84, num_components=84, frequency_range=(1, 5), amplitude_range=(0.5, 10), step_range=(0, 2)):
+def generate_drunk_cycle_xy_values(
+    length=84,
+    num_components=84,
+    frequency_range=(1, 5),
+    amplitude_range=(0.5, 10),
+    step_range=(0, 2),
+):
     # Y values generation
     y_sequence = np.zeros(length)
     for _ in range(num_components):
@@ -80,7 +89,9 @@ def generate_drunk_cycle_xy_values(length=84, num_components=84, frequency_range
         frequency = np.random.randint(*frequency_range) * (2 * np.pi / length)
         amplitude = np.random.uniform(*amplitude_range)
         phase_shift = np.random.uniform(0, 2 * np.pi)
-        angles = np.linspace(0, frequency * length, length, endpoint=False) + phase_shift
+        angles = (
+            np.linspace(0, frequency * length, length, endpoint=False) + phase_shift
+        )
         y_sequence += np.sin(angles) * amplitude
 
     # X values generation
@@ -89,7 +100,9 @@ def generate_drunk_cycle_xy_values(length=84, num_components=84, frequency_range
     total_step_sum = np.sum(steps)
 
     # Calculate the scale factor to scale total steps to just under 360
-    scale_factor = (360 - ((360 / length)*np.random.uniform(*step_range))) / total_step_sum
+    scale_factor = (
+        360 - ((360 / length) * np.random.uniform(*step_range))
+    ) / total_step_sum
 
     # Apply the scale factor and generate the sequence of X values
     x_values = np.cumsum(steps * scale_factor)
@@ -113,7 +126,7 @@ def generate_and_process_drunk_cycle_orbit_data(length=21):
             break
 
     # Smooth the X values using deltas
-    #smoothed_x_values = smooth_deltas(x_values, 5)
+    # smoothed_x_values = smooth_deltas(x_values, 5)
     smoothed_x_values = x_values
 
     return x_values, y_values, smoothed_x_values, smoothed_y_values
@@ -123,8 +136,10 @@ def generate_and_process_drunk_cycle_orbit_data(length=21):
 class StableVideoDiffusionGuidance(BaseObject):
     @dataclass
     class Config(BaseObject.Config):
-        stable_research_path: str = "/weka/home-chunhanyao/stable-research" # "/admin/home-vikram/ROBIN/stable-research"
-        pretrained_model_name_or_path: str = "prediction_3D_OBJ_SVD21V" # "prediction_stable_jucifer_3D_OBJ"
+        stable_research_path: str = "/weka/home-chunhanyao/stable-research"  # "/admin/home-vikram/ROBIN/stable-research"
+        pretrained_model_name_or_path: str = (
+            "prediction_3D_OBJ_SVD21V"  # "prediction_stable_jucifer_3D_OBJ"
+        )
         cond_aug: float = 0.00
         num_steps: int = None  # 50
         height: int = 576
@@ -136,7 +151,7 @@ class StableVideoDiffusionGuidance(BaseObject):
         cond_img_height: int = 576
         cond_elevation_deg: float = 0.0
         cond_azimuth_deg: float = 0.0
-        cond_camera_distance: float = 3.5 # 1.2
+        cond_camera_distance: float = 3.5  # 1.2
 
         grad_clip: Optional[
             Any
@@ -172,7 +187,7 @@ class StableVideoDiffusionGuidance(BaseObject):
             self.cfg.num_steps,
             self.cfg.guidance_scale,
             self.cfg.height,
-            self.cfg.cond_img_height
+            self.cfg.cond_img_height,
         )
         for p in self.model.parameters():
             p.requires_grad_(False)
@@ -180,7 +195,9 @@ class StableVideoDiffusionGuidance(BaseObject):
         self.grad_clip_val: Optional[float] = None
 
         # self.prepare_embeddings(os.path.join(self.cfg.cond_image_path, '000020.png'))
-        self.prepare_embeddings(os.path.join(self.cfg.cond_image_path, 'rgba', 'rgba_0020.png'))
+        self.prepare_embeddings(
+            os.path.join(self.cfg.cond_image_path, "rgba", "rgba_0020.png")
+        )
 
         self.T = self.model.T
         self.num_steps = self.model.num_steps
@@ -239,16 +256,23 @@ class StableVideoDiffusionGuidance(BaseObject):
         )
 
         latents = latents.type_as(rgb)
-        # elev_deg = np.array([0, 5, 10, 15, 10, 5, 0, -5, -10, -15, -10, -5, 0, 5, 10, 15, 10, 5, 0, -5, 0])
-        # azimuth_deg = np.linspace(0, 360.0, 22)[1:]
-
-        # check drunk orbit generation here: 
+        # check drunk orbit generation here:
         # https://github.com/Stability-AI/reve/blob/7708534bae0ce2ea376a678c5269ff0727655208/scripts/blender/blender_script.py#L1178
-        _, _, azimuth_deg, elev_deg = generate_and_process_drunk_cycle_orbit_data(length=21)
-        azimuth_deg = -90 + random.uniform(-180, 180) + azimuth_deg     # Remember that -90 is front.
-        
+        _, _, azimuth_deg, elev_deg = generate_and_process_drunk_cycle_orbit_data(
+            length=21
+        )
+        azimuth_deg = (
+            -90 + random.uniform(-180, 180) + azimuth_deg
+        )  # Remember that -90 is front.
+
         with torch.no_grad():
-            rgb_pred = self.model(latents, t, elev_deg=elev_deg, azimuth_deg=azimuth_deg, guidance_eval=guidance_eval)
+            rgb_pred = self.model(
+                latents,
+                t,
+                elev_deg=elev_deg,
+                azimuth_deg=azimuth_deg,
+                guidance_eval=guidance_eval,
+            )
 
         if guidance_eval:
             rgb_pred, rgb_i, rgb_d, rgb_eval = rgb_pred
@@ -264,14 +288,14 @@ class StableVideoDiffusionGuidance(BaseObject):
                     self.cfg.guidance_eval_dir,
                     f"guidance_eval_denoise_{self.count:05d}.mp4",
                 ),
-                rgb_d, # one step denoised
+                rgb_d,  # one step denoised
             )
             imageio.mimsave(
                 os.path.join(
                     self.cfg.guidance_eval_dir,
                     f"guidance_eval_final_{self.count:05d}.mp4",
                 ),
-                rgb_eval, # continue denoised
+                rgb_eval,  # continue denoised
             )
         self.count += 1
 

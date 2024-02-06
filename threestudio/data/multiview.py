@@ -17,8 +17,8 @@ from tqdm import tqdm
 import threestudio
 from threestudio import register
 from threestudio.data.svd_uncond import (
-   SVDCameraDataModuleConfig,
-   SVDCameraIterableDataset,
+    SVDCameraDataModuleConfig,
+    SVDCameraIterableDataset,
 )
 from threestudio.data.uncond import RandomCameraDataset
 from threestudio.utils.base import Updateable
@@ -82,7 +82,7 @@ class MultiviewsDataModuleConfig:
     eval_width: int = 576
     n_views: int = 21
     n_val_views: int = 21
-    n_test_views: int = 21 # 126
+    n_test_views: int = 21  # 126
     elevation_range: Tuple[float, float] = (-10, 90)
     azimuth_range: Tuple[float, float] = (-180, 180)
     camera_distance_range: Tuple[float, float] = (1, 1.5)
@@ -95,8 +95,8 @@ class MultiviewsDataModuleConfig:
     up_perturb: float = 0.02
     light_position_perturb: float = 1.0
     light_distance_range: Tuple[float, float] = (0.8, 1.5)
-    eval_elevation_deg: float = 5. # 0
-    eval_camera_distance: float = 2.0 # 1.8
+    eval_elevation_deg: float = 5.0  # 0
+    eval_camera_distance: float = 3.5  # 2.0
     eval_fovy_deg: float = 33.9
     light_sample_strategy: str = "dreamfusion"
     batch_uniform_azimuth: bool = True
@@ -238,7 +238,7 @@ class MultiviewIterableDataset(IterableDataset, Updateable):
         if self.cfg.use_random_camera:
             self.random_pose_generator.update_step(epoch, global_step, on_load_weights)
         if global_step == self.cfg.full_resolution_step:
-            self.cfg.train_downsample_resolution = 1 # 1
+            self.cfg.train_downsample_resolution = 1
             self.__init__(self.cfg)
             pass
 

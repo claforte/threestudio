@@ -278,7 +278,7 @@ class Zero123(BaseLift3DSystem):
         Args:
             guidance: one of "ref" (reference image supervision), "zero123"
         """
-        # import pdb; pdb.set_trace()
+        # import pdb pdb.set_trace()
         if guidance == "ref":
             # bg_color = torch.rand_like(batch['rays_o'])
             ambient_ratio = 1.0
@@ -331,7 +331,10 @@ class Zero123(BaseLift3DSystem):
         # import pdb; pdb.set_trace()
 
         # ZERO123
-        if self.cfg.guidance_type == "svd-guidance" and self.C(self.cfg.loss.lambda_sds) > 0:
+        if (
+            self.cfg.guidance_type == "svd-guidance"
+            and self.C(self.cfg.loss.lambda_sds) > 0
+        ):
             out = self.training_substep(batch, batch_idx, guidance="zero123")
             total_loss += out["loss"]
 
@@ -457,7 +460,7 @@ class Zero123(BaseLift3DSystem):
     #         name="test_step",
     #         step=self.true_global_step,
     #     )
-        
+
     def test_step(self, batch, batch_idx):
         out = self(batch)
         self.save_image_grid(
@@ -484,7 +487,7 @@ class Zero123(BaseLift3DSystem):
     #     shutil.rmtree(
     #         os.path.join(self.get_save_dir(), f"it{self.true_global_step}-test")
     #     )
-        
+
     def on_test_epoch_end(self):
         self.save_img_sequence(
             f"test",

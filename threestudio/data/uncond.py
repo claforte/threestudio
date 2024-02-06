@@ -1,13 +1,13 @@
 import bisect
-import math
-import random
-import os
-import sys
 import glob
 import json
-import numpy as np
+import math
+import os
+import random
+import sys
 from dataclasses import dataclass, field
 
+import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
@@ -39,7 +39,7 @@ class RandomCameraDataModuleConfig:
     eval_width: int = 512
     eval_batch_size: int = 1
     n_val_views: int = 1
-    n_test_views: int = 21 # 120
+    n_test_views: int = 21  # 120
     elevation_range: Tuple[float, float] = (-10, 90)
     azimuth_range: Tuple[float, float] = (-180, 180)
     camera_distance_range: Tuple[float, float] = (1, 1.5)
@@ -353,19 +353,21 @@ class RandomCameraDataset(Dataset):
             self.n_views = self.cfg.n_test_views
 
         if self.cfg.use_gt_orbit:
-            orbit_files = sorted(glob.glob(os.path.join(self.cfg.gt_orbit, "frame_*.json")))
+            orbit_files = sorted(
+                glob.glob(os.path.join(self.cfg.gt_orbit, "frame_*.json"))
+            )
             elevations = []
             azimuths = []
             camera_distances = []
             for orb in orbit_files:
                 d = json.load(open(orb, "r"))
-                elevations.append(math.pi/2. - d["polar"])
+                elevations.append(math.pi / 2.0 - d["polar"])
                 azimuths.append(d["azimuth"])
                 camera_distances.append(d["camera_dist"])
 
             elevation = torch.tensor(elevations).float()
             azimuth = torch.tensor(azimuths).float()
-            azimuth += math.pi * 2 / self.n_views # - azimuth[-1]
+            azimuth += math.pi * 2 / self.n_views  # - azimuth[-1]
             camera_distances = torch.tensor(camera_distances).float()
 
             elevation_deg = elevation * 180 / math.pi
@@ -375,7 +377,9 @@ class RandomCameraDataset(Dataset):
             azimuth_deg: Float[Tensor, "B"]
             # if self.split == "val":
             # make sure the first and last view are not the same
-            azimuth_deg = torch.linspace(0, 360.0, self.n_views + 1)[1:] # [: self.n_views]
+            azimuth_deg = torch.linspace(0, 360.0, self.n_views + 1)[
+                1:
+            ]  # [: self.n_views]
             # else:
             #     azimuth_deg = torch.linspace(0, 360.0, self.n_views)
             elevation_deg: Float[Tensor, "B"] = torch.full_like(
