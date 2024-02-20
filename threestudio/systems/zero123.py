@@ -1,9 +1,14 @@
+import glob
 import os
 import random
+import re
 import shutil
 from dataclasses import dataclass, field
 from math import ceil
 
+import cv2
+import imageio
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torchmetrics import PearsonCorrCoef
@@ -25,6 +30,9 @@ class Zero123(BaseLift3DSystem):
         ambient_ratio_min: float = 0.5
         rays_divisor_power: int = 0
         ref_batch_size: int = 1
+        obj_name: str = None
+        train_on_drunk: bool = False
+        disable_grid_prune_step: int = 2000
 
     cfg: Config
 
@@ -34,6 +42,7 @@ class Zero123(BaseLift3DSystem):
         if len(self.cfg.guidance_type):
             self.guidance = threestudio.find(self.cfg.guidance_type)(self.cfg.guidance)
             self.guidance.device = torch.device("cuda:1")
+            self.comp_rgb_cache = None
 
         if self.cfg.loss.lambda_lpips != 0:
             self.lpips = LearnedPerceptualImagePatchSimilarity(
@@ -183,6 +192,7 @@ class Zero123(BaseLift3DSystem):
                 # **batch,
                 batch["elevation"],
                 batch["azimuth"],
+                batch["frame_idx"],
                 rgb_as_latents=False,
                 guidance_eval=guidance_eval,
             )
@@ -280,7 +290,6 @@ class Zero123(BaseLift3DSystem):
         Args:
             guidance: one of "ref" (reference image supervision), "zero123"
         """
-        # import pdb; pdb.set_trace()
         if guidance == "ref":
             # bg_color = torch.rand_like(batch['rays_o'])
             ambient_ratio = 1.0
@@ -296,9 +305,12 @@ class Zero123(BaseLift3DSystem):
             #     + (1 - self.C(self.cfg.ambient_ratio_min)) * random.random()
             # )
             ambient_ratio = self.C(self.cfg.ambient_ratio_min)
-            rays_divisor = 1
-            offset_x_tensor = torch.zeros(1, dtype=torch.int64)
-            offset_y_tensor = torch.zeros(1, dtype=torch.int64)
+            # rays_divisor = 1
+            # offset_x_tensor = torch.zeros(1, dtype=torch.int64)
+            # offset_y_tensor = torch.zeros(1, dtype=torch.int64)
+            rays_divisor = 2 ** ceil(self.C(self.cfg.rays_divisor_power))
+            offset_x_tensor = torch.randint(0, rays_divisor, (self.cfg.ref_batch_size,))
+            offset_y_tensor = torch.randint(0, rays_divisor, (self.cfg.ref_batch_size,))
 
         batch["rays_divisor"] = rays_divisor
         batch["offset_x"] = offset_x_tensor
@@ -309,18 +321,34 @@ class Zero123(BaseLift3DSystem):
 
         if guidance == "ref":
             out = self(batch)
+
         elif guidance == "zero123":
             # self.renderer.to(self.guidance.device)
-            # for _, v in batch.items():
+            # for k, v in batch.items():
             #     if torch.is_tensor(v):
-            #         v = v.to(self.guidance.device)
+            #         batch[k] = v.to(self.guidance.device)
+
+            B, H, W = batch["rays_o"].shape[:3]
+            elevation_all = batch["elevation"].clone()
+            azimuth_all = batch["azimuth"].clone()
+            for k, v in batch.items():
+                if k != "frame_idx" and torch.is_tensor(v) and v.shape[0] == B:
+                    batch[k] = batch[k][batch["frame_idx"]]
+
             out = self(batch)
-            # for _, v in out.items():
+
+            # comp_rgb_cache = torch.ones(B, H, W, 3).float().to(self.device)
+            # comp_rgb_cache[batch["frame_idx"]] = out["comp_rgb"]
+            # out["comp_rgb"] = comp_rgb_cache
+            # batch['elevation'] = elevation_all
+            # batch['azimuth'] = azimuth_all
+
+            # for k, v in out.items():
             #     if torch.is_tensor(v):
-            #         v = v.to(self.device)
-            # for _, v in batch.items():
+            #         out[k] = v.to(self.device)
+            # for k, v in batch.items():
             #     if torch.is_tensor(v):
-            #         v = v.to(self.device)
+            #         batch[k] = v.to(self.device)
             # self.renderer.to(self.device)
 
         return self.compute_loss(
@@ -330,7 +358,8 @@ class Zero123(BaseLift3DSystem):
     def training_step(self, batch, batch_idx):
         total_loss = 0.0
 
-        # import pdb; pdb.set_trace()
+        if batch_idx > self.cfg.disable_grid_prune_step:
+            self.renderer.cfg.grid_prune = False
 
         # ZERO123
         if (
@@ -345,7 +374,6 @@ class Zero123(BaseLift3DSystem):
         total_loss += out["loss"]
 
         self.log("train/loss", total_loss, prog_bar=True)
-
         return {"loss": total_loss}
 
     def validation_step(self, batch, batch_idx):
@@ -411,7 +439,7 @@ class Zero123(BaseLift3DSystem):
             filestem,
             "(\d+)\.png",
             save_format="mp4",
-            fps=14,
+            fps=10,
             name="validation_epoch_end",
             step=self.true_global_step,
         )
@@ -465,16 +493,42 @@ class Zero123(BaseLift3DSystem):
 
     def test_step(self, batch, batch_idx):
         out = self(batch)
-        self.save_image_grid(
-            f"rgb/{batch['index'][0]}.png",
-            [
-                {
-                    "type": "rgb",
-                    "img": out["comp_rgb"][0],
-                    "kwargs": {"data_format": "HWC"},
-                },
-            ],
-        )
+        if batch["index"][0] < 21:
+            self.save_image_grid(
+                f"sober/{batch['index'][0]:0>4}.png",
+                [
+                    {
+                        "type": "rgb",
+                        "img": out["comp_rgb"][0],
+                        "kwargs": {"data_format": "HWC"},
+                    },
+                ],
+                name="test_step",
+            )
+        elif batch["index"][0] < 42:
+            self.save_image_grid(
+                f"drunk/{batch['index'][0]-21:0>4}.png",
+                [
+                    {
+                        "type": "rgb",
+                        "img": out["comp_rgb"][0],
+                        "kwargs": {"data_format": "HWC"},
+                    },
+                ],
+                name="test_step",
+            )
+        else:
+            self.save_image_grid(
+                f"random/{batch['index'][0]-42:0>4}.png",
+                [
+                    {
+                        "type": "rgb",
+                        "img": out["comp_rgb"][0],
+                        "kwargs": {"data_format": "HWC"},
+                    },
+                ],
+                name="test_step",
+            )
 
     # def on_test_epoch_end(self):
     #     self.save_img_sequence(
@@ -491,10 +545,144 @@ class Zero123(BaseLift3DSystem):
     #     )
 
     def on_test_epoch_end(self):
-        self.save_img_sequence(
+        self.save_img_grid_sequence(
             f"test",
-            f"rgb",
-            "(\d+)\.png",
             save_format="mp4",
-            fps=30,
+            fps=10,
         )
+        # self.save_img_sequence(
+        #     f"sober",
+        #     f"sober",
+        #     "(\d+)\.png",
+        #     save_format="mp4",
+        #     fps=10,
+        #     name="test",
+        # )
+        # self.save_img_sequence(
+        #     f"drunk",
+        #     f"drunk",
+        #     "(\d+)\.png",
+        #     save_format="mp4",
+        #     fps=10,
+        #     name="test",
+        # )
+
+    def save_img_grid_sequence(
+        self,
+        filename,
+        save_format="mp4",
+        fps=30,
+    ) -> str:
+        assert save_format in ["gif", "mp4"]
+        if not filename.endswith(save_format):
+            filename += f".{save_format}"
+        save_path = self.get_save_path(filename)
+        nerf_sober_pattern = os.path.join(self.get_save_dir(), "sober", "*.png")
+        nerf_drunk_pattern = os.path.join(self.get_save_dir(), "drunk", "*.png")
+        nerf_random_pattern = os.path.join(self.get_save_dir(), "random", "*.png")
+        gt_sober_pattern = os.path.join(
+            "/weka/proj-sv3d/DATASETS/GSO_sober21", self.cfg.obj_name, "rgba", "*.png"
+        )
+        gt_drunk_pattern = os.path.join(
+            "/weka/proj-sv3d/DATASETS/GSO_drunk21", self.cfg.obj_name, "rgba", "*.png"
+        )
+        if self.cfg.train_on_drunk:
+            svd_pattern = os.path.join(
+                "/weka/home-chunhanyao/GSO_drunk21", self.cfg.obj_name, "*.png"
+            )
+            svd_label = "SVD_drunk"
+        else:
+            svd_pattern = os.path.join(
+                "/weka/home-chunhanyao/GSO_sober21", self.cfg.obj_name, "*.png"
+            )
+            svd_label = "SVD_sober"
+
+        imgs_gt_sober = [cv2.imread(f, -1) for f in sorted(glob.glob(gt_sober_pattern))]
+        imgs_gt_drunk = [cv2.imread(f, -1) for f in sorted(glob.glob(gt_drunk_pattern))]
+        imgs_nerf_sober = [cv2.imread(f) for f in sorted(glob.glob(nerf_sober_pattern))]
+        imgs_nerf_drunk = [cv2.imread(f) for f in sorted(glob.glob(nerf_drunk_pattern))]
+        imgs_nerf_random = [
+            cv2.imread(f) for f in sorted(glob.glob(nerf_random_pattern))
+        ]
+        imgs_svd = [cv2.imread(f) for f in sorted(glob.glob(svd_pattern))]
+
+        img_grids = []
+        for im1, im2, im3, im4, im5, im6 in zip(
+            imgs_gt_drunk,
+            imgs_svd,
+            imgs_nerf_drunk,
+            imgs_gt_sober,
+            imgs_nerf_sober,
+            imgs_nerf_random,
+        ):
+            im1[im1[..., 3] == 0, :3] = 255
+            im4[im4[..., 3] == 0, :3] = 255
+            img_grid = np.vstack(
+                (
+                    np.hstack((im1[..., :3], im2, im3)),
+                    np.hstack((im4[..., :3], im5, im6)),
+                )
+            )
+            img_grid = cv2.putText(
+                img=np.copy(img_grid),
+                text="GT_drunk",
+                org=(30, 50),
+                fontFace=2,
+                fontScale=1,
+                color=(0, 0, 0),
+                thickness=2,
+            )
+            img_grid = cv2.putText(
+                img=np.copy(img_grid),
+                text=svd_label,
+                org=(606, 50),
+                fontFace=2,
+                fontScale=1,
+                color=(0, 0, 0),
+                thickness=2,
+            )
+            img_grid = cv2.putText(
+                img=np.copy(img_grid),
+                text="NeRF (drunk renders)",
+                org=(1182, 50),
+                fontFace=2,
+                fontScale=1,
+                color=(0, 0, 0),
+                thickness=2,
+            )
+            img_grid = cv2.putText(
+                img=np.copy(img_grid),
+                text="GT_sober",
+                org=(30, 606),
+                fontFace=2,
+                fontScale=1,
+                color=(0, 0, 0),
+                thickness=2,
+            )
+            img_grid = cv2.putText(
+                img=np.copy(img_grid),
+                text="NeRF (sober renders)",
+                org=(606, 606),
+                fontFace=2,
+                fontScale=1,
+                color=(0, 0, 0),
+                thickness=2,
+            )
+            img_grid = cv2.putText(
+                img=np.copy(img_grid),
+                text="NeRF (random renders)",
+                org=(1182, 606),
+                fontFace=2,
+                fontScale=1,
+                color=(0, 0, 0),
+                thickness=2,
+            )
+            img_grids.append(img_grid)
+
+        if save_format == "gif":
+            imgs = [cv2.cvtColor(i, cv2.COLOR_BGR2RGB) for i in img_grids]
+            imageio.mimsave(save_path, imgs, fps=fps, palettesize=256)
+        elif save_format == "mp4":
+            imgs = [cv2.cvtColor(i, cv2.COLOR_BGR2RGB) for i in img_grids]
+            imageio.mimsave(save_path, imgs, fps=fps)
+        return save_path

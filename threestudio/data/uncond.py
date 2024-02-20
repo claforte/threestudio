@@ -27,6 +27,80 @@ from threestudio.utils.ops import (
 from threestudio.utils.typing import *
 
 
+def generate_drunk_cycle_xy_values(
+    length=21,
+    init_elev=0,
+    num_components=84,
+    frequency_range=(1, 5),
+    amplitude_range=(0.5, 10),
+    step_range=(0, 2),
+):
+    # Y values generation
+    y_sequence = np.ones(length) * init_elev
+    for _ in range(num_components):
+        # Choose a frequency that will complete whole cycles in the sequence
+        frequency = np.random.randint(*frequency_range) * (2 * np.pi / length)
+        amplitude = np.random.uniform(*amplitude_range)
+        phase_shift = np.random.choice([0, np.pi])  # np.random.uniform(0, 2 * np.pi)
+        angles = (
+            np.linspace(0, frequency * length, length, endpoint=False) + phase_shift
+        )
+        y_sequence += np.sin(angles) * amplitude
+    # X values generation
+    # Generate length - 1 steps since the last step is back to start
+    steps = np.random.uniform(*step_range, length - 1)
+    total_step_sum = np.sum(steps)
+    # Calculate the scale factor to scale total steps to just under 360
+    scale_factor = (
+        360 - ((360 / length) * np.random.uniform(*step_range))
+    ) / total_step_sum
+    # Apply the scale factor and generate the sequence of X values
+    x_values = np.cumsum(steps * scale_factor)
+    # Ensure the sequence starts at 0 and add the final step to complete the loop
+    x_values = np.insert(x_values, 0, 0)
+    return x_values, y_sequence
+
+
+def smooth_data(data, window_size):
+    # Extend data at both ends by wrapping around to create a continuous loop
+    pad_size = window_size
+    padded_data = np.concatenate((data[-pad_size:], data, data[:pad_size]))
+
+    # Apply smoothing
+    kernel = np.ones(window_size) / window_size
+    smoothed_data = np.convolve(padded_data, kernel, mode="same")
+
+    # Extract the smoothed data corresponding to the original sequence
+    # Adjust the indices to account for the larger padding
+    start_index = pad_size
+    end_index = -pad_size if pad_size != 0 else None
+    smoothed_original_data = smoothed_data[start_index:end_index]
+    return smoothed_original_data
+
+
+def gen_drunk_loop(length=21, elev_deg=0):
+    # while True:
+    #     # Generate the combined X and Y values using the new function
+    #     azim_values, elev_values = generate_drunk_cycle_xy_values(
+    #         length=84, init_elev=elev_deg
+    #     )
+    #     # Smooth the Y values directly
+    #     smoothed_elev_values = smooth_data(elev_values, 5)
+    #     max_magnitude = np.max(np.abs(smoothed_elev_values))
+    #     if max_magnitude < 90:
+    #         break
+    azim_values, elev_values = generate_drunk_cycle_xy_values(
+        length=length * 2, init_elev=elev_deg
+    )
+    smoothed_elev_values = smooth_data(elev_values, 5)
+    smoothed_elev_values = np.clip(smoothed_elev_values, -30, 45)
+    subsample = 2  # 84 // length
+    azim_rad = np.deg2rad(azim_values[::subsample])
+    elev_rad = np.deg2rad(smoothed_elev_values[::subsample])
+    # Make cond frame the last one
+    return np.roll(azim_rad, -1), np.roll(elev_rad, -1)
+
+
 @dataclass
 class RandomCameraDataModuleConfig:
     # height, width, and batch_size should be Union[int, List[int]]
@@ -35,11 +109,11 @@ class RandomCameraDataModuleConfig:
     width: Any = 64
     batch_size: Any = 1
     resolution_milestones: List[int] = field(default_factory=lambda: [])
-    eval_height: int = 512
-    eval_width: int = 512
+    eval_height: int = 576
+    eval_width: int = 576
     eval_batch_size: int = 1
-    n_val_views: int = 1
-    n_test_views: int = 21  # 120
+    n_val_views: int = 21
+    n_test_views: int = 21
     elevation_range: Tuple[float, float] = (-10, 90)
     azimuth_range: Tuple[float, float] = (-180, 180)
     camera_distance_range: Tuple[float, float] = (1, 1.5)
@@ -52,15 +126,17 @@ class RandomCameraDataModuleConfig:
     up_perturb: float = 0.02
     light_position_perturb: float = 1.0
     light_distance_range: Tuple[float, float] = (0.8, 1.5)
-    eval_elevation_deg: float = 15.0
-    eval_camera_distance: float = 1.5
-    eval_fovy_deg: float = 70.0
+    eval_elevation_deg: float = 5.0
+    eval_camera_distance: float = 2.0
+    eval_fovy_deg: float = 33.9
     light_sample_strategy: str = "dreamfusion"
     batch_uniform_azimuth: bool = True
     progressive_until: int = 0  # progressive ranges for elevation, azimuth, r, fovy
 
     use_gt_orbit: bool = True
-    gt_orbit: str = ""
+    sober_orbit_path: str = None
+    drunk_orbit_path: str = None
+    train_orbit_path: str = None
 
 
 class RandomCameraIterableDataset(IterableDataset, Updateable):
@@ -353,35 +429,55 @@ class RandomCameraDataset(Dataset):
             self.n_views = self.cfg.n_test_views
 
         if self.cfg.use_gt_orbit:
-            orbit_files = sorted(
-                glob.glob(os.path.join(self.cfg.gt_orbit, "frame_*.json"))
+            sober_orbits = sorted(
+                glob.glob(os.path.join(self.cfg.sober_orbit_path, "frame_*.json"))
             )
+            drunk_orbits = sorted(
+                glob.glob(os.path.join(self.cfg.drunk_orbit_path, "frame_*.json"))
+            )
+
             elevations = []
             azimuths = []
             camera_distances = []
-            for orb in orbit_files:
+            for orb in sober_orbits:
+                d = json.load(open(orb, "r"))
+                elevations.append(math.pi / 2.0 - d["polar"])
+                azimuths.append(d["azimuth"])
+                camera_distances.append(d["camera_dist"])
+            for orb in drunk_orbits:
                 d = json.load(open(orb, "r"))
                 elevations.append(math.pi / 2.0 - d["polar"])
                 azimuths.append(d["azimuth"])
                 camera_distances.append(d["camera_dist"])
 
+            random_azimuths, random_elevations = gen_drunk_loop(
+                length=self.n_views, elev_deg=elevations[41]
+            )
+            for azim, elev in zip(random_azimuths, random_elevations):
+                elevations.append(elev)
+                azimuths.append(azim)
+                camera_distances.append(camera_distances[0])
+
+            camera_distances = torch.tensor(camera_distances).float()
             elevation = torch.tensor(elevations).float()
             azimuth = torch.tensor(azimuths).float()
-            azimuth += math.pi * 2 / self.n_views  # - azimuth[-1]
-            camera_distances = torch.tensor(camera_distances).float()
+
+            if "drunk" in self.cfg.train_orbit_path:
+                azimuth[42:] = azimuth[42:] - azimuth[41].clone() + azimuth[20].clone()
+                azimuth[:42] = azimuth[:42] - azimuth[41].clone()
+            else:
+                # azimuth[42:] = azimuth[42:] - azimuth[20].clone()
+                azimuth[:42] = azimuth[:42] - azimuth[20].clone()
 
             elevation_deg = elevation * 180 / math.pi
             azimuth_deg = azimuth * 180 / math.pi
 
+            self.n_views = len(elevations)
+
         else:
-            azimuth_deg: Float[Tensor, "B"]
-            # if self.split == "val":
-            # make sure the first and last view are not the same
-            azimuth_deg = torch.linspace(0, 360.0, self.n_views + 1)[
-                1:
-            ]  # [: self.n_views]
-            # else:
-            #     azimuth_deg = torch.linspace(0, 360.0, self.n_views)
+            azimuth_deg: Float[Tensor, "B"] = torch.linspace(
+                0, 360.0, self.n_views + 1
+            )[1:]
             elevation_deg: Float[Tensor, "B"] = torch.full_like(
                 azimuth_deg, self.cfg.eval_elevation_deg
             )
@@ -409,7 +505,7 @@ class RandomCameraDataset(Dataset):
         # default camera up direction as +z
         up: Float[Tensor, "B 3"] = torch.as_tensor([0, 0, 1], dtype=torch.float32)[
             None, :
-        ].repeat(self.cfg.eval_batch_size, 1)
+        ].repeat(self.n_views, 1)
 
         fovy_deg: Float[Tensor, "B"] = torch.full_like(
             elevation_deg, self.cfg.eval_fovy_deg

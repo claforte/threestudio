@@ -1,3 +1,4 @@
+import glob
 import json
 import math
 import os
@@ -68,7 +69,7 @@ def inter_pose(pose_0, pose_1, ratio):
 class MultiviewsDataModuleConfig:
     dataroot: str = ""
     train_downsample_resolution: int = 4
-    eval_downsample_resolution: int = 4
+    eval_downsample_resolution: int = 1
     full_resolution_step: int = 1200
     train_data_interval: int = 1
     eval_data_interval: int = 1
@@ -82,7 +83,7 @@ class MultiviewsDataModuleConfig:
     eval_width: int = 576
     n_views: int = 21
     n_val_views: int = 21
-    n_test_views: int = 21  # 126
+    n_test_views: int = 21
     elevation_range: Tuple[float, float] = (-10, 90)
     azimuth_range: Tuple[float, float] = (-180, 180)
     camera_distance_range: Tuple[float, float] = (1, 1.5)
@@ -95,17 +96,21 @@ class MultiviewsDataModuleConfig:
     up_perturb: float = 0.02
     light_position_perturb: float = 1.0
     light_distance_range: Tuple[float, float] = (0.8, 1.5)
-    eval_elevation_deg: float = 5.0  # 0
-    eval_camera_distance: float = 3.5  # 2.0
+    eval_elevation_deg: float = 5.0
+    eval_camera_distance: float = 2.0
     eval_fovy_deg: float = 33.9
     light_sample_strategy: str = "dreamfusion"
     batch_uniform_azimuth: bool = True
     progressive_until: int = 0  # progressive ranges for elevation, azimuth, r, fovy
 
-    use_gt_orbit: bool = True
-    gt_orbit: str = ""
+    input_view_only: bool = False
     use_random_camera: bool = False
     random_camera: dict = field(default_factory=dict)
+    train_on_gt: bool = False
+    use_gt_orbit: bool = True
+    sober_orbit_path: str = None
+    drunk_orbit_path: str = None
+    train_orbit_path: str = None
 
 
 class MultiviewIterableDataset(IterableDataset, Updateable):
@@ -164,6 +169,10 @@ class MultiviewIterableDataset(IterableDataset, Updateable):
                 f"Unknown camera layout {self.cfg.camera_layout}. Now support only around and front."
             )
 
+        gt_frame_paths = sorted(
+            glob.glob(os.path.join(self.cfg.train_orbit_path, "rgba", "*.png"))
+        )
+
         for idx, frame in tqdm(enumerate(frames)):
             intrinsic: Float[Tensor, "4 4"] = torch.eye(4)
             intrinsic[0, 0] = frame["fl_x"] / scale
@@ -171,11 +180,19 @@ class MultiviewIterableDataset(IterableDataset, Updateable):
             intrinsic[0, 2] = frame["cx"] / scale
             intrinsic[1, 2] = frame["cy"] / scale
 
-            frame_path = os.path.join(self.cfg.dataroot, frame["file_path"])
-            rgba = cv2.cvtColor(
-                cv2.imread(frame_path, cv2.IMREAD_UNCHANGED),
-                cv2.COLOR_BGRA2RGBA,
-            )
+            if self.cfg.train_on_gt:
+                frame_path = gt_frame_paths[idx]
+                rgba = cv2.cvtColor(
+                    cv2.imread(frame_path, cv2.IMREAD_UNCHANGED),
+                    cv2.COLOR_BGRA2RGBA,
+                )
+                rgba[rgba[..., 3] == 0, :3] = 255
+            else:
+                frame_path = os.path.join(self.cfg.dataroot, frame["file_path"])
+                rgba = cv2.cvtColor(
+                    cv2.imread(frame_path, cv2.IMREAD_UNCHANGED),
+                    cv2.COLOR_BGRA2RGBA,
+                )
             rgba = (
                 cv2.resize(rgba, (self.frame_w, self.frame_h)).astype(np.float32) / 255
             )
@@ -249,7 +266,10 @@ class MultiviewIterableDataset(IterableDataset, Updateable):
             yield {}
 
     def collate(self, batch):
-        index = torch.randint(0, self.n_frames, (self.n_views,))
+        if self.cfg.input_view_only:
+            index = torch.tensor([self.n_frames - 1]).long().reshape((self.n_views,))
+        else:
+            index = torch.randint(0, self.n_frames, (self.n_views,))
         batch = {
             "index": index,
             "rays_o": self.rays_o[index],
@@ -362,6 +382,10 @@ class MultiviewDataset(Dataset):
                 frames_position.append(camera_position)
                 frames_direction.append(direction)
         else:
+            gt_frame_paths = sorted(
+                glob.glob(os.path.join(self.cfg.train_orbit_path, "rgba", "*.png"))
+            )
+
             for idx, frame in tqdm(enumerate(frames)):
                 intrinsic: Float[Tensor, "4 4"] = torch.eye(4)
                 intrinsic[0, 0] = frame["fl_x"] / scale
@@ -369,7 +393,10 @@ class MultiviewDataset(Dataset):
                 intrinsic[0, 2] = frame["cx"] / scale
                 intrinsic[1, 2] = frame["cy"] / scale
 
-                frame_path = os.path.join(self.cfg.dataroot, frame["file_path"])
+                if self.cfg.train_on_gt:
+                    frame_path = gt_frame_paths[idx]
+                else:
+                    frame_path = os.path.join(self.cfg.dataroot, frame["file_path"])
                 img = cv2.imread(frame_path)[:, :, ::-1].copy()
                 img = cv2.resize(img, (self.frame_w, self.frame_h))
                 img: Float[Tensor, "H W 3"] = torch.FloatTensor(img) / 255
@@ -473,6 +500,10 @@ class MultiviewDataModule(pl.LightningDataModule):
             self.val_dataset = RandomCameraDataset(self.cfg, "val")
         if stage in [None, "test", "predict"]:
             self.test_dataset = RandomCameraDataset(self.cfg, "test")
+            # self.test_dataset.rays_o[21:] = self.train_dataset.rays_o
+            # self.test_dataset.rays_d[21:] = self.train_dataset.rays_d
+            # self.test_dataset.mvp_mtx[21:] = self.train_dataset.mvp_mtx
+            # self.test_dataset.c2w[21:] = self.train_dataset.frames_c2w
 
     def prepare_data(self):
         pass

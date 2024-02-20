@@ -327,7 +327,8 @@ class BaseLift3DSystem(BaseSystem):
             if not hasattr(self, save_func_name):
                 raise ValueError(f"{save_func_name} not supported by the SaverMixin")
             save_func = getattr(self, save_func_name)
-            save_func(f"it{self.true_global_step}-export/{out.save_name}", **out.params)
+            # save_func(f"it{self.true_global_step}-export/{out.save_name}", **out.params)
+            save_func(f"{out.save_name}", **out.params)
 
     def on_predict_end(self) -> None:
         if self._save_dir is not None:

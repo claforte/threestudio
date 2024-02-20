@@ -1,6 +1,5 @@
 import importlib
 import os
-import random
 from dataclasses import dataclass
 
 import cv2
@@ -57,101 +56,23 @@ def resize_like(x, ref):
     return x
 
 
-def smooth_data(data, window_size):
-    # Extend data at both ends by wrapping around to create a continuous loop
-    pad_size = window_size
-    padded_data = np.concatenate((data[-pad_size:], data, data[:pad_size]))
-
-    # Apply smoothing
-    kernel = np.ones(window_size) / window_size
-    smoothed_data = np.convolve(padded_data, kernel, mode="same")
-
-    # Extract the smoothed data corresponding to the original sequence
-    # Adjust the indices to account for the larger padding
-    start_index = pad_size
-    end_index = -pad_size if pad_size != 0 else None
-    smoothed_original_data = smoothed_data[start_index:end_index]
-
-    return smoothed_original_data
-
-
-def generate_drunk_cycle_xy_values(
-    length=84,
-    num_components=84,
-    frequency_range=(1, 5),
-    amplitude_range=(0.5, 10),
-    step_range=(0, 2),
-):
-    # Y values generation
-    y_sequence = np.zeros(length)
-    for _ in range(num_components):
-        # Choose a frequency that will complete whole cycles in the sequence
-        frequency = np.random.randint(*frequency_range) * (2 * np.pi / length)
-        amplitude = np.random.uniform(*amplitude_range)
-        phase_shift = np.random.uniform(0, 2 * np.pi)
-        angles = (
-            np.linspace(0, frequency * length, length, endpoint=False) + phase_shift
-        )
-        y_sequence += np.sin(angles) * amplitude
-
-    # X values generation
-    # Generate length - 1 steps since the last step is back to start
-    steps = np.random.uniform(*step_range, length - 1)
-    total_step_sum = np.sum(steps)
-
-    # Calculate the scale factor to scale total steps to just under 360
-    scale_factor = (
-        360 - ((360 / length) * np.random.uniform(*step_range))
-    ) / total_step_sum
-
-    # Apply the scale factor and generate the sequence of X values
-    x_values = np.cumsum(steps * scale_factor)
-
-    # Ensure the sequence starts at 0 and add the final step to complete the loop
-    x_values = np.insert(x_values, 0, 0)
-
-    return x_values, y_sequence
-
-
-def generate_and_process_drunk_cycle_orbit_data(length=21):
-    while True:
-        # Generate the combined X and Y values using the new function
-        x_values, y_values = generate_drunk_cycle_xy_values(length=length)
-
-        # Smooth the Y values directly
-        smoothed_y_values = smooth_data(y_values, 5)
-
-        max_magnitude = np.max(np.abs(smoothed_y_values))
-        if max_magnitude < 90:
-            break
-
-    # Smooth the X values using deltas
-    # smoothed_x_values = smooth_deltas(x_values, 5)
-    smoothed_x_values = x_values
-
-    return smoothed_x_values, smoothed_y_values
-
-
 @threestudio.register("svd-guidance")
 class StableVideoDiffusionGuidance(BaseObject):
     @dataclass
     class Config(BaseObject.Config):
-        stable_research_path: str = "/weka/home-chunhanyao/stable-research"  # "/admin/home-vikram/ROBIN/stable-research"
-        pretrained_model_name_or_path: str = (
-            "prediction_3D_OBJ_SVD21V"  # "prediction_stable_jucifer_3D_OBJ"
-        )
+        stable_research_path: str = "/weka/home-chunhanyao/stable-research"
+        pretrained_model_name_or_path: str = "prediction_3D_OBJ_SVD21V"
         cond_aug: float = 0.00
-        num_steps: int = None  # 50
+        num_steps: int = 50
         height: int = 576
-        guidance_scale: float = None  # 4.0
+        guidance_scale: float = 4.0
 
         vram_O: bool = True
 
         cond_image_path: str = "load/images/hamburger_rgba.png"
-        cond_img_height: int = 576
-        cond_elevation_deg: float = 0.0
+        cond_elevation_deg: float = 5.0
         cond_azimuth_deg: float = 0.0
-        cond_camera_distance: float = 3.5  # 1.2
+        cond_camera_distance: float = 3.5
 
         grad_clip: Optional[
             Any
@@ -187,7 +108,6 @@ class StableVideoDiffusionGuidance(BaseObject):
             self.cfg.num_steps,
             self.cfg.guidance_scale,
             self.cfg.height,
-            self.cfg.cond_img_height,
         )
         for p in self.model.parameters():
             p.requires_grad_(False)
@@ -232,9 +152,9 @@ class StableVideoDiffusionGuidance(BaseObject):
         rgb: Float[Tensor, "B H W C"],
         elevation: Float[Tensor, "B"],
         azimuth: Float[Tensor, "B"],
+        frame_idx: Float[Tensor, "N"],
         **kwargs,
     ):
-        # import pdb; pdb.set_trace()
         device_input = rgb.device
         rgb = rgb.to(self.device)
         rgb_BCHW = rgb.permute(0, 3, 1, 2)
@@ -247,7 +167,7 @@ class StableVideoDiffusionGuidance(BaseObject):
         t = torch.randint(
             self.min_step,
             self.max_step + 1,
-            [batch_size // self.T],
+            [max(1, batch_size // self.T)],
             dtype=torch.long,
             device=self.device,
         )
@@ -258,14 +178,6 @@ class StableVideoDiffusionGuidance(BaseObject):
         )
 
         latents = latents.type_as(rgb)
-        # check drunk orbit generation here:
-        # https://github.com/Stability-AI/reve/blob/7708534bae0ce2ea376a678c5269ff0727655208/scripts/blender/blender_script.py#L1178
-        # azimuth_deg, elev_deg = generate_and_process_drunk_cycle_orbit_data(
-        #     length=21
-        # )
-        # azimuth_deg = (
-        #     -90 + random.uniform(-180, 180) + azimuth_deg
-        # )  # Remember that -90 is front.
         azimuth_deg = azimuth.cpu().numpy()
         elev_deg = elevation.cpu().numpy()
 
@@ -315,7 +227,7 @@ class StableVideoDiffusionGuidance(BaseObject):
         rgb_pred = resize_like(rgb_pred, rgb_BCHW)
 
         # w = (1 - self.alphas[t]).reshape(-1, 1, 1, 1)
-        grad = rgb_pred - rgb_BCHW
+        grad = (rgb_pred - rgb_BCHW)[frame_idx.to(rgb_pred.device)]
         grad = grad.to(device_input)
         grad = torch.nan_to_num(grad)
         # clip grad for stable training?

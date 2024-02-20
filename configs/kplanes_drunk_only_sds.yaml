@@ -1,0 +1,172 @@
+name: "triplane_svd"
+exp_root_dir: "outputs"
+seed: 0
+use_timestamp: False
+
+
+data_type: "multiview-camera-datamodule"
+data:
+  train_downsample_resolution: 2
+  eval_downsample_resolution: 1
+  full_resolution_step: 100
+  n_views: 1
+  input_view_only: True
+  dataroot: "/weka/home-chunhanyao/GSO_drunk21/${tag}/"
+  camera_layout: "input"
+  use_gt_orbit: True
+  sober_orbit_path: "/weka/proj-sv3d/DATASETS/GSO_sober21/${tag}/"
+  drunk_orbit_path: "/weka/proj-sv3d/DATASETS/GSO_drunk21/${tag}/"
+  train_orbit_path: ${data.drunk_orbit_path}
+  use_random_camera: True
+  random_camera: # threestudio/data/svd_uncond.py -> SVDDataModuleConfig
+    height: [288, 288, 288] # [512, 512, 512] # [144, 144, 144]
+    width: [288, 288, 288] # [512, 512, 512] # [144, 144, 144]
+    batch_size: [16, 16, 16] # same as video model # of frames
+    resolution_milestones: [600, 900]
+    eval_height: 576
+    eval_width: 576
+    eval_batch_size: 1
+    elevation_range: [-10, 80]
+    azimuth_range: [-180, 180]
+    camera_distance_range: [2.0, 2.0]
+    fovy_range: [33.9, 33.9]
+    progressive_until: 0
+    camera_perturb: 0.0
+    center_perturb: 0.0
+    up_perturb: 0.0
+    light_position_perturb: 1.0
+    light_distance_range: [7.5, 10.0]
+    eval_elevation_deg: 5.0
+    eval_camera_distance: 2.0
+    eval_fovy_deg: 33.9
+    cond_img_path: ${data.train_orbit_path}
+    cond_elevation_deg: 5.0
+    cond_azimuth_deg: 0.0
+    cond_camera_distance: 2.0
+    use_random_orbit: True
+    light_sample_strategy: "dreamfusion"
+    batch_uniform_azimuth: False
+    n_train_views: 16 # 21
+    n_val_views: 21
+    n_test_views: 21
+
+system_type: "zero123-system"
+system:
+  geometry_type: "implicit-volume"
+  geometry:
+    radius: 0.6 # 1
+
+    # the density initialization proposed in the DreamFusion paper
+    # does not work very well
+    # density_bias: "blob_dreamfusion"
+    # density_activation: exp
+    # density_blob_scale: 5.
+    # density_blob_std: 0.2
+
+    # use Magic3D density initialization instead
+    density_bias: "blob_magic3d"
+    density_activation: softplus
+    density_blob_scale: 10.
+    density_blob_std: 0.5
+    n_feature_dims: 16
+
+    pos_encoding_config:
+      otype: KPlanes
+      n_feature_count: 32
+      resolutions: [128,256,512]     # each entry N in this list creates K planes with resolution N x N.
+      n_dimensions: 3            # 3 => 3 planes per resolution, 4 => 6 planes per resolution
+    mlp_network_config:
+      otype: "VanillaMLP"
+      activation: "ReLU"
+      output_activation: "none"
+      n_neurons: 64
+      n_hidden_layers: 1
+
+  material_type: "neural-radiance-material"
+  material:
+    input_feature_dims: 16
+    dir_encoding_config:
+      otype: "SphericalHarmonics"
+      degree: 4
+
+  background_type: "solid-color-background"
+
+  renderer_type: "nerf-volume-renderer"
+  renderer:
+    radius: ${system.geometry.radius}
+    num_samples_per_ray: 512
+    return_comp_normal: False
+    return_normal_perturb: False
+    grid_prune: True
+
+
+  prompt_processor_type: "dummy-prompt-processor" # Zero123 doesn't use prompts
+  prompt_processor:
+    pretrained_model_name_or_path: ""
+    prompt: ""
+
+  guidance_type: "svd-guidance"
+  guidance:
+    stable_research_path: "/weka/home-chunhanyao/stable-research"
+    pretrained_model_name_or_path: "prediction_3D_OBJ_SVD21V_drunk"
+    cond_aug: 0.00
+    num_steps: 50
+    height: 576
+    vram_O: true
+    cond_image_path: ${data.random_camera.cond_img_path}
+    cond_elevation_deg: ${data.random_camera.cond_elevation_deg}
+    cond_azimuth_deg: ${data.random_camera.cond_azimuth_deg}
+    cond_camera_distance: ${data.random_camera.cond_camera_distance}
+    guidance_scale: 2.5 # 4.0
+    min_step_percent: [600, 0.7, 0.2, 800] # [50, 0.7, 0.3, 200]  # (start_iter, start_val, end_val, end_iter)
+    max_step_percent: [600, 0.9, 0.8, 800] # [50, 0.98, 0.8, 200]
+    noises_per_item: 1
+    guidance_eval_freq: 300
+
+  rays_divisor_power: 2
+  ambient_ratio_min: [0, 0.1, 0.5, 400, 0.9, 401]
+  obj_name: ${tag}
+  train_on_drunk: True
+  disable_grid_prune_step: 2000
+
+  loggers:
+    wandb:
+      enable: false
+      project: "threestudio"
+      name: None
+
+  loss:
+    lambda_sds: [100, 0.0, 0.1, 200] # 0.1
+    lambda_rgb: 500. # [0, 1000., 500., 400]
+    lambda_mask: 100.
+    lambda_depth: 0. # 0.05
+    lambda_depth_rel: 0. # [0, 0, 0.05, 100]
+    lambda_normal: 0. # [0, 0, 0.05, 100]
+    lambda_normal_smooth: 0
+    lambda_3d_normal_smooth: 0
+    lambda_orient: 0.0
+    lambda_sparsity: 0.5 # should be tweaked for every model
+    lambda_opaque: [100, 0., 300., 300]
+    lambda_l1_regularization: 0
+    lambda_total_variation: 0
+    lambda_lpips: [100, 0., 1000., 300]
+
+  optimizer:
+    name: Adam
+    args:
+      lr: 5e-3 # 0.01
+      betas: [0.9, 0.99]
+      eps: 1.e-8
+
+trainer:
+  max_steps: 1000
+  log_every_n_steps: 1
+  num_sanity_val_steps: 0
+  val_check_interval: 600
+  enable_progress_bar: true
+  precision: 32
+
+checkpoint:
+  save_last: true # save at each validation time
+  save_top_k: -1
+  every_n_train_steps: ${trainer.max_steps}

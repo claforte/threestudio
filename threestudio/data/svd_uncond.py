@@ -1,5 +1,8 @@
 import bisect
+import glob
+import json
 import math
+import os
 import random
 from dataclasses import dataclass, field
 
@@ -11,7 +14,7 @@ from torch.utils.data import DataLoader, Dataset, IterableDataset
 
 import threestudio
 from threestudio import register
-from threestudio.data.uncond import RandomCameraDataset
+from threestudio.data.uncond import RandomCameraDataset, gen_drunk_loop
 from threestudio.utils.base import Updateable
 from threestudio.utils.config import parse_structured
 from threestudio.utils.misc import get_device
@@ -24,81 +27,6 @@ from threestudio.utils.ops import (
 from threestudio.utils.typing import *
 
 
-def smooth_data(data, window_size):
-    # Extend data at both ends by wrapping around to create a continuous loop
-    pad_size = window_size
-    padded_data = np.concatenate((data[-pad_size:], data, data[:pad_size]))
-
-    # Apply smoothing
-    kernel = np.ones(window_size) / window_size
-    smoothed_data = np.convolve(padded_data, kernel, mode="same")
-
-    # Extract the smoothed data corresponding to the original sequence
-    # Adjust the indices to account for the larger padding
-    start_index = pad_size
-    end_index = -pad_size if pad_size != 0 else None
-    smoothed_original_data = smoothed_data[start_index:end_index]
-
-    return smoothed_original_data
-
-
-def generate_drunk_cycle_xy_values(
-    length=84,
-    num_components=84,
-    frequency_range=(1, 5),
-    amplitude_range=(0.5, 10),
-    step_range=(0, 2),
-):
-    # Y values generation
-    y_sequence = np.zeros(length)
-    for _ in range(num_components):
-        # Choose a frequency that will complete whole cycles in the sequence
-        frequency = np.random.randint(*frequency_range) * (2 * np.pi / length)
-        amplitude = np.random.uniform(*amplitude_range)
-        phase_shift = np.random.uniform(0, 2 * np.pi)
-        angles = (
-            np.linspace(0, frequency * length, length, endpoint=False) + phase_shift
-        )
-        y_sequence += np.sin(angles) * amplitude
-
-    # X values generation
-    # Generate length - 1 steps since the last step is back to start
-    steps = np.random.uniform(*step_range, length - 1)
-    total_step_sum = np.sum(steps)
-
-    # Calculate the scale factor to scale total steps to just under 360
-    scale_factor = (
-        360 - ((360 / length) * np.random.uniform(*step_range))
-    ) / total_step_sum
-
-    # Apply the scale factor and generate the sequence of X values
-    x_values = np.cumsum(steps * scale_factor)
-
-    # Ensure the sequence starts at 0 and add the final step to complete the loop
-    x_values = np.insert(x_values, 0, 0)
-
-    return x_values, y_sequence
-
-
-def generate_and_process_drunk_cycle_orbit_data(length=21):
-    while True:
-        # Generate the combined X and Y values using the new function
-        x_values, y_values = generate_drunk_cycle_xy_values(length=length)
-
-        # Smooth the Y values directly
-        smoothed_y_values = smooth_data(y_values, 5)
-
-        max_magnitude = np.max(np.abs(smoothed_y_values))
-        if max_magnitude < 90:
-            break
-
-    # Smooth the X values using deltas
-    # smoothed_x_values = smooth_deltas(x_values, 5)
-    smoothed_x_values = x_values
-
-    return smoothed_x_values, smoothed_y_values
-
-
 @dataclass
 class SVDCameraDataModuleConfig:
     # height, width, and batch_size should be Union[int, List[int]]
@@ -107,12 +35,12 @@ class SVDCameraDataModuleConfig:
     width: Any = 64
     batch_size: Any = 1
     resolution_milestones: List[int] = field(default_factory=lambda: [])
-    eval_height: int = 512
-    eval_width: int = 512
+    eval_height: int = 576
+    eval_width: int = 576
     eval_batch_size: int = 1
     n_train_views: int = 21
-    n_val_views: int = 21  # 30
-    n_test_views: int = 21  # 120
+    n_val_views: int = 21
+    n_test_views: int = 21
     elevation_range: Tuple[float, float] = (-10, 90)
     azimuth_range: Tuple[float, float] = (-180, 180)
     camera_distance_range: Tuple[float, float] = (1, 1.5)
@@ -125,12 +53,18 @@ class SVDCameraDataModuleConfig:
     up_perturb: float = 0.02
     light_position_perturb: float = 1.0
     light_distance_range: Tuple[float, float] = (0.8, 1.5)
-    eval_elevation_deg: float = 15.0
-    eval_camera_distance: float = 1.5
-    eval_fovy_deg: float = 70.0
+    eval_elevation_deg: float = 5.0
+    eval_camera_distance: float = 2.0
+    eval_fovy_deg: float = 33.9
     light_sample_strategy: str = "dreamfusion"
     batch_uniform_azimuth: bool = True
     progressive_until: int = 0  # progressive ranges for elevation, azimuth, r, fovy
+
+    cond_img_path: str = None
+    cond_elevation_deg: float = 0.0
+    cond_azimuth_deg: float = 0.0
+    cond_camera_distance: float = 2.0
+    use_random_orbit: bool = False
 
 
 class SVDCameraIterableDataset(IterableDataset, Updateable):
@@ -178,12 +112,20 @@ class SVDCameraIterableDataset(IterableDataset, Updateable):
 
         self.n_views = self.cfg.n_train_views
 
+        orbit_file = sorted(
+            glob.glob(os.path.join(self.cfg.cond_img_path, "frame_*.json"))
+        )[-1]
+        transforms = json.load(open(orbit_file, "r"))
+        self.cond_elevation_deg = 90 - transforms["polar"] * 180 / math.pi
+        self.cond_azimuth_deg = transforms["azimuth"] * 180 / math.pi
+        self.cond_camera_distance = transforms["camera_dist"]
+
         azimuth_deg: Float[Tensor, "B"] = torch.linspace(0, 360.0, self.n_views + 1)[1:]
         elevation_deg: Float[Tensor, "B"] = torch.full_like(
-            azimuth_deg, self.cfg.eval_elevation_deg
+            azimuth_deg, self.cond_elevation_deg
         )
         camera_distances: Float[Tensor, "B"] = torch.full_like(
-            elevation_deg, self.cfg.eval_camera_distance
+            elevation_deg, self.cond_camera_distance  # self.cfg.eval_camera_distance
         )
 
         elevation = elevation_deg * math.pi / 180
@@ -259,7 +201,7 @@ class SVDCameraIterableDataset(IterableDataset, Updateable):
         self.elevation_deg, self.azimuth_deg = elevation_deg, azimuth_deg
         self.camera_distances = camera_distances
 
-    def update_step_sober(
+    def update_step_legacy(
         self, epoch: int, global_step: int, on_load_weights: bool = False
     ):
         size_ind = bisect.bisect_right(self.resolution_milestones, global_step) - 1
@@ -318,54 +260,67 @@ class SVDCameraIterableDataset(IterableDataset, Updateable):
             directions[:, :, :, :2] / focal_length[:, None, None, None]
         )
 
-        azimuth_deg, elevation_deg = generate_and_process_drunk_cycle_orbit_data(
-            length=self.batch_size
-        )
-        azimuth_deg = torch.from_numpy(azimuth_deg).to(torch.float32)
-        elevation_deg = torch.from_numpy(elevation_deg).to(torch.float32)
+        if self.cfg.use_random_orbit:
+            # azimuth, elevation = gen_drunk_loop(
+            #     length=self.n_views,
+            #     elev_deg=self.cond_elevation_deg,
+            # )
+            azimuth, elevation = gen_drunk_loop(
+                length=21,
+                elev_deg=self.cond_elevation_deg,
+            )
+            azimuth = azimuth[-self.n_views :]
+            elevation = elevation[-self.n_views :]
+            azimuth = torch.from_numpy(azimuth).to(torch.float32)
+            elevation = torch.from_numpy(elevation).to(torch.float32)
 
-        elevation = elevation_deg * math.pi / 180
-        azimuth = azimuth_deg * math.pi / 180
+            elevation_deg = elevation * 180 / math.pi
+            azimuth_deg = azimuth * 180 / math.pi
 
-        # convert spherical coordinates to cartesian coordinates
-        # right hand coordinate system, x back, y right, z up
-        # elevation in (-90, 90), azimuth from +x to +y in (-180, 180)
-        camera_positions: Float[Tensor, "B 3"] = torch.stack(
-            [
-                self.camera_distances * torch.cos(elevation) * torch.cos(azimuth),
-                self.camera_distances * torch.cos(elevation) * torch.sin(azimuth),
-                self.camera_distances * torch.sin(elevation),
-            ],
-            dim=-1,
-        )
+            # convert spherical coordinates to cartesian coordinates
+            # right hand coordinate system, x back, y right, z up
+            # elevation in (-90, 90), azimuth from +x to +y in (-180, 180)
+            camera_positions: Float[Tensor, "B 3"] = torch.stack(
+                [
+                    self.camera_distances * torch.cos(elevation) * torch.cos(azimuth),
+                    self.camera_distances * torch.cos(elevation) * torch.sin(azimuth),
+                    self.camera_distances * torch.sin(elevation),
+                ],
+                dim=-1,
+            )
 
-        # default scene center at origin
-        center = torch.zeros_like(camera_positions)
-        # default camera up direction as +z
-        up = torch.as_tensor([0, 0, 1], dtype=torch.float32)[None, :].repeat(
-            self.n_views, 1
-        )
+            # default scene center at origin
+            center = torch.zeros_like(camera_positions)
+            # default camera up direction as +z
+            up = torch.as_tensor([0, 0, 1], dtype=torch.float32)[None, :].repeat(
+                self.n_views, 1
+            )
 
-        # light position is always at front camera
-        light_positions = camera_positions[-1].repeat(len(camera_positions), 1)
+            # light position is always at front camera
+            light_positions = camera_positions[-1].repeat(len(camera_positions), 1)
 
-        lookat: Float[Tensor, "B 3"] = F.normalize(center - camera_positions, dim=-1)
-        right: Float[Tensor, "B 3"] = F.normalize(torch.cross(lookat, up), dim=-1)
-        up = F.normalize(torch.cross(right, lookat), dim=-1)
-        c2w3x4: Float[Tensor, "B 3 4"] = torch.cat(
-            [torch.stack([right, up, -lookat], dim=-1), camera_positions[:, :, None]],
-            dim=-1,
-        )
-        c2w: Float[Tensor, "B 4 4"] = torch.cat(
-            [c2w3x4, torch.zeros_like(c2w3x4[:, :1])], dim=1
-        )
-        c2w[:, 3, 3] = 1.0
+            lookat: Float[Tensor, "B 3"] = F.normalize(
+                center - camera_positions, dim=-1
+            )
+            right: Float[Tensor, "B 3"] = F.normalize(torch.cross(lookat, up), dim=-1)
+            up = F.normalize(torch.cross(right, lookat), dim=-1)
+            c2w3x4: Float[Tensor, "B 3 4"] = torch.cat(
+                [
+                    torch.stack([right, up, -lookat], dim=-1),
+                    camera_positions[:, :, None],
+                ],
+                dim=-1,
+            )
+            c2w: Float[Tensor, "B 4 4"] = torch.cat(
+                [c2w3x4, torch.zeros_like(c2w3x4[:, :1])], dim=1
+            )
+            c2w[:, 3, 3] = 1.0
 
-        self.c2w = c2w
-        self.camera_positions = camera_positions
-        self.light_positions = light_positions
-        self.elevation, self.azimuth = elevation, azimuth
-        self.elevation_deg, self.azimuth_deg = elevation_deg, azimuth_deg
+            self.c2w = c2w
+            self.camera_positions = camera_positions
+            self.light_positions = light_positions
+            self.elevation, self.azimuth = elevation, azimuth
+            self.elevation_deg, self.azimuth_deg = elevation_deg, azimuth_deg
 
         rays_o, rays_d = get_rays(directions, self.c2w, keepdim=True)
         proj_mtx: Float[Tensor, "B 4 4"] = get_projection_matrix(
@@ -381,7 +336,10 @@ class SVDCameraIterableDataset(IterableDataset, Updateable):
             yield {}
 
     def collate(self, batch) -> Dict[str, Any]:
-        # idx = torch.randperm(self.n_views)[: self.batch_size]
+        idx = torch.randperm(self.n_views)[: self.batch_size]
+        idx, _ = torch.sort(idx)
+        # idx = torch.randperm(self.n_views-1)[:self.batch_size-1]
+        # idx = torch.cat([torch.zeros_like(idx[:1])+self.n_views-1, idx], 0)
         return {
             "rays_o": self.rays_o,
             "rays_d": self.rays_d,
@@ -392,6 +350,7 @@ class SVDCameraIterableDataset(IterableDataset, Updateable):
             "elevation": self.elevation_deg,
             "azimuth": self.azimuth_deg,
             "camera_distances": self.camera_distances,
+            "frame_idx": idx,
             "height": self.height,
             "width": self.width,
         }
