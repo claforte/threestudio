@@ -11,6 +11,7 @@ from threestudio.models.materials.base import BaseMaterial
 from threestudio.models.renderers.base import Rasterizer, VolumeRenderer
 from threestudio.utils.misc import get_device
 from threestudio.utils.rasterize import NVDiffRasterizerContext
+from threestudio.utils.ssao import calculate_ssao
 from threestudio.utils.typing import *
 
 
@@ -19,6 +20,12 @@ class NVDiffRasterizer(Rasterizer):
     @dataclass
     class Config(VolumeRenderer.Config):
         context_type: str = "gl"
+
+        perform_ssao: bool = False
+        ssao_max_distance: float = 0.25
+        ssao_intensity: float = 1.0
+        ssao_samples: int = 8
+        ssao_sample_rad: float = 0.02
 
     cfg: Config
 
@@ -62,6 +69,14 @@ class NVDiffRasterizer(Rasterizer):
             gb_normal_aa, rast, v_pos_clip, mesh.t_pos_idx
         )
         out.update({"comp_normal": gb_normal_aa})  # in [0, 1]
+
+        gb_pos, _ = self.ctx.interpolate_one(mesh.v_pos, rast, mesh.t_pos_idx)
+        gb_pos_aa = torch.lerp(torch.zeros_like(gb_pos), gb_pos, mask.float())
+        gb_pos_aa = self.ctx.antialias(gb_pos_aa, rast, v_pos_clip, mesh.t_pos_idx)
+
+        depth = gb_pos - camera_positions[:, None, None, :]
+
+        out.update({"positions": gb_pos_aa, "depth": depth})
 
         # TODO: make it clear whether to compute the normal, now we compute it in all cases
         # consider using: require_normal_computation = render_normal or (render_rgb and material.requires_normal)

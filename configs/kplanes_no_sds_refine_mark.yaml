@@ -1,0 +1,128 @@
+name: "triplane_svd"
+exp_root_dir: "outputs"
+seed: 0
+use_timestamp: False
+
+
+data_type: "multiview-camera-datamodule"
+data:
+  train_downsample_resolution: 2
+  eval_downsample_resolution: 1
+  full_resolution_step: 100
+  n_views: [99, 21, 6, 100]
+  camera_layout: "input"
+  train_on_gt: False
+  use_gt_orbit: True
+  sober_or_drunk: "drunk"
+  sober_orbit_path: "/weka/proj-sv3d/DATASETS/GSO_sober21/${tag}/"
+  drunk_orbit_path: "/weka/proj-sv3d/DATASETS/GSO_drunk21/${tag}/"
+  dataroot: "/weka/home-chunhanyao/GSO_${data.sober_or_drunk}21/${tag}/"
+  use_random_camera: False
+
+  use_omnidata_normals: True
+  omnidata_normal_path: ""
+
+system_type: "zero123-system"
+system:
+  refinement: true
+  geometry_convert_from: "implicit-volume"
+  geometry_convert_inherit_texture: true
+  geometry_type: "tetrahedra-sdf-grid"
+  geometry:
+    radius: 0.62
+    isosurface_resolution: 128
+    isosurface_deformable_grid: true
+    # isosurface_outlier_n_faces_threshold: 0.01
+    n_feature_dims: 3 # 16
+
+    pos_encoding_config:
+      otype: HashGrid
+      n_levels: 16
+      n_features_per_level: 2
+      log2_hashmap_size: 19
+      base_resolution: 16
+      per_level_scale: 1.447269237440378 # max resolution 4096
+    # pos_encoding_config:
+    #   otype: KPlanes
+    #   n_feature_count: 32
+    #   resolutions: [128,256,512]     # each entry N in this list creates K planes with resolution N x N.
+    #   n_dimensions: 3            # 3 => 3 planes per resolution, 4 => 6 planes per resolution
+    mlp_network_config:
+      otype: "VanillaMLP"
+      activation: "ReLU"
+      output_activation: "none"
+      n_neurons: 64
+      n_hidden_layers: 1
+
+  # material_type: "diffuse-with-point-light-material"
+  # material:
+  #   ambient_only_steps: 0
+  #   textureless_prob: 0.05
+  #   albedo_activation: sigmoid
+  material_type: "diffuse-with-point-light-material"
+  material:
+    ambient_only_steps: 100000
+
+  background_type: "solid-color-background"
+  background:
+    random_aug_prob: 0.5
+    random_aug: true
+
+  renderer_type: "nvdiff-rasterizer"
+  renderer:
+    context_type: cuda
+
+
+  prompt_processor_type: "dummy-prompt-processor" # Zero123 doesn't use prompts
+  prompt_processor:
+    pretrained_model_name_or_path: ""
+    prompt: ""
+
+  # rays_divisor_power: 2
+  ambient_ratio_min: [0, 0.1, 0.5, 400, 0.9, 401]
+  obj_name: ${tag}
+  sober_or_drunk: ${data.sober_or_drunk}
+  disable_grid_prune_step: 1000
+
+  loggers:
+    wandb:
+      enable: false
+      project: dummy
+      name: dummy
+
+  loss:
+    lambda_sds: 0.0
+    lambda_rgb: 1000.
+    lambda_mask: 750. # 100.
+    lambda_depth: 0.
+    lambda_depth_rel: 0.
+    lambda_normal: [0, 100., 50., 500]
+    lambda_normal_smooth: [0, 0., 100., 200, 10., 300]
+    lambda_3d_normal_smooth: 0.
+    lambda_normal_consistency: 300. # 75.
+    lambda_laplacian_smoothness: 0.
+    lambda_3d_smoothness_albedo: [100, 0., 100., 200]
+    loss_3d_smoothness_delta: 0.01
+    lambda_l1_regularization: 0
+    lambda_total_variation: 0
+    lambda_lpips: 300.
+
+  optimizer:
+    name: Adam
+    args:
+      lr: 0.01
+      betas: [0.9, 0.99]
+      eps: 1.e-8
+
+trainer:
+  max_steps: 1000
+  log_every_n_steps: 1
+  num_sanity_val_steps: 0
+  val_check_interval: 1200
+  enable_progress_bar: true
+  precision: 32
+
+checkpoint:
+  save_last: true # save at each validation time
+  save_top_k: -1
+  every_n_train_steps: ${trainer.max_steps}

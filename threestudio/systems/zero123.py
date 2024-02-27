@@ -16,6 +16,7 @@ from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
 import threestudio
 from threestudio.systems.base import BaseLift3DSystem
+from threestudio.utils.img_gradient import compute_image_gradients
 from threestudio.utils.misc import C, get_CPU_mem, get_GPU_mem
 from threestudio.utils.ops import binary_cross_entropy, dot
 from threestudio.utils.typing import *
@@ -31,7 +32,7 @@ class Zero123(BaseLift3DSystem):
         rays_divisor_power: int = 0
         ref_batch_size: int = 1
         obj_name: str = None
-        train_on_drunk: bool = False
+        sober_or_drunk: str = None
         disable_grid_prune_step: int = 2000
 
     cfg: Config
@@ -41,7 +42,7 @@ class Zero123(BaseLift3DSystem):
         super().configure()
         if len(self.cfg.guidance_type):
             self.guidance = threestudio.find(self.cfg.guidance_type)(self.cfg.guidance)
-            self.guidance.device = torch.device("cuda:1")
+            self.guidance.device = torch.device("cuda:0")
             self.comp_rgb_cache = None
 
         if self.cfg.loss.lambda_lpips != 0:
@@ -163,9 +164,7 @@ class Zero123(BaseLift3DSystem):
             # normal loss
             if self.C(self.cfg.loss.lambda_normal) > 0:
                 valid_gt_normal = (
-                    1
-                    - 2
-                    * torch.cat(
+                    torch.cat(
                         [
                             batch["ref_normal"][
                                 :, xx::rays_divisor, yy::rays_divisor, :
@@ -173,14 +172,48 @@ class Zero123(BaseLift3DSystem):
                             for (xx, yy) in zip(offset_x_tensor, offset_y_tensor)
                         ]
                     )[gt_mask.squeeze(-1)]
+                    * 2
+                    - 1
                 )  # [B, 3]
+
                 valid_pred_normal = (
-                    2 * out["comp_normal"][gt_mask.squeeze(-1)] - 1
+                    out["comp_normal"][gt_mask.squeeze(-1)] * 2 - 1
                 )  # [B, 3]
                 set_loss(
                     "normal",
                     1 - F.cosine_similarity(valid_pred_normal, valid_gt_normal).mean(),
                 )
+
+            # Smoothness loss
+            bilateral_smoothness_enabled = any(
+                [
+                    k.startswith("lambda_bilateral_smoothness_")
+                    for k in self.cfg.loss.keys()
+                ]
+            )
+            if bilateral_smoothness_enabled:
+                grad = sum([t.abs() for t in compute_image_gradients(gt_rgb)])
+                grad_scaler = (-grad * 3).exp().detach() * gt_mask.float()
+                for k in self.cfg.loss.keys():
+                    if k.startswith("lambda_bilateral_smoothness_"):
+                        if self.C(self.cfg.loss[k]) > 0:
+                            smoothness_type = k.replace(
+                                "lambda_bilateral_smoothness_", ""
+                            )
+                            if smoothness_type in out:
+                                val = out[smoothness_type]
+                                val_grad = compute_image_gradients(val)
+                                val_norm = [
+                                    t.norm(dim=-1, keepdim=True) for t in val_grad
+                                ]
+                                val_loss = (
+                                    sum([(1 + x).sqrt() - 1 for x in val_norm])
+                                    * grad_scaler
+                                )[gt_mask.squeeze(-1)]
+                                set_loss(
+                                    f"bilateral_smoothness_{smoothness_type}",
+                                    val_loss.mean(),
+                                )
 
             self.log("train/mem_cpu", get_CPU_mem(), prog_bar=True)
             self.log("train/mem_gpu", get_GPU_mem()[0], prog_bar=True)
@@ -232,6 +265,47 @@ class Zero123(BaseLift3DSystem):
                 set_loss("total_variation", self.geometry.encoding.encoding.loss_tv())
             if self.C(self.cfg.loss.lambda_l1_regularization) > 0:
                 set_loss("l1_regularization", self.geometry.encoding.encoding.loss_l1())
+
+        smoothness_3d_enabled = any(
+            [k.startswith("lambda_3d_smoothness_") for k in self.cfg.loss.keys()]
+        )
+        if smoothness_3d_enabled:
+            gt_rays_d = torch.cat(
+                [
+                    batch["rays_d"][:, xx::rays_divisor, yy::rays_divisor, :]
+                    for (xx, yy) in zip(offset_x_tensor, offset_y_tensor)
+                ]
+            )
+            gt_rays_o = torch.cat(
+                [
+                    batch["rays_o"][:, xx::rays_divisor, yy::rays_divisor, :]
+                    for (xx, yy) in zip(offset_x_tensor, offset_y_tensor)
+                ]
+            )
+            surface_pos = out["depth"] * gt_rays_d + gt_rays_o
+            binary_mask = (out["opacity"] > 0.5).squeeze(-1)
+            selected_pos = surface_pos[binary_mask]
+            sample_delta = self.cfg.loss.loss_3d_smoothness_delta
+            random_offset = torch.randn_like(selected_pos) * sample_delta
+
+            main_out = self.renderer.geometry(selected_pos)
+            offset_out = self.renderer.geometry(selected_pos + random_offset)
+            main_out.update(self.renderer.material.export(**main_out))
+            offset_out.update(self.renderer.material.export(**offset_out))
+            for k in self.cfg.loss.keys():
+                if k.startswith("lambda_3d_smoothness_"):
+                    if self.C(self.cfg.loss[k]) > 0:
+                        smoothness_type = k.replace("lambda_3d_smoothness_", "")
+                        if (
+                            smoothness_type in main_out
+                            and smoothness_type in offset_out
+                        ):
+                            val_loss = (
+                                main_out[smoothness_type] - offset_out[smoothness_type]
+                            ).square()
+                            set_loss(
+                                f"3d_smoothness_{smoothness_type}", val_loss.mean()
+                            )
 
         if not self.cfg.refinement:
             if self.C(self.cfg.loss.lambda_orient) > 0:
@@ -586,7 +660,7 @@ class Zero123(BaseLift3DSystem):
         gt_drunk_pattern = os.path.join(
             "/weka/proj-sv3d/DATASETS/GSO_drunk21", self.cfg.obj_name, "rgba", "*.png"
         )
-        if self.cfg.train_on_drunk:
+        if self.cfg.sober_or_drunk == "drunk":
             svd_pattern = os.path.join(
                 "/weka/home-chunhanyao/GSO_drunk21", self.cfg.obj_name, "*.png"
             )

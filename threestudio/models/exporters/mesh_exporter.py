@@ -23,8 +23,13 @@ class MeshExporter(Exporter):
         save_normal: bool = False
         save_uv: bool = True
         save_texture: bool = True
+        remesh_mesh: bool = False
+        clean_mesh: bool = False
         texture_size: int = 1024
         texture_format: str = "jpg"
+        mesh_simplification_reduction: Optional[List[float]] = None
+        mesh_simplification_triangle_count: Optional[List[int]] = None
+        botsch_remesh_config: dict = field(default_factory=dict)
         xatlas_chart_options: dict = field(default_factory=dict)
         xatlas_pack_options: dict = field(default_factory=dict)
         context_type: str = "gl"
@@ -51,125 +56,201 @@ class MeshExporter(Exporter):
             raise ValueError(f"Unsupported mesh export format: {self.cfg.fmt}")
 
     def export_obj_with_mtl(self, mesh: Mesh) -> List[ExporterOutput]:
-        params = {
-            "mesh": mesh,
-            "save_mat": True,
-            "save_normal": self.cfg.save_normal,
-            "save_uv": self.cfg.save_uv,
-            "save_vertex_color": False,
-            "map_Kd": None,  # Base Color
-            "map_Ks": None,  # Specular
-            "map_Bump": None,  # Normal
-            # ref: https://en.wikipedia.org/wiki/Wavefront_.obj_file#Physically-based_Rendering
-            "map_Pm": None,  # Metallic
-            "map_Pr": None,  # Roughness
-            "map_format": self.cfg.texture_format,
-        }
+        ret = []
 
-        if self.cfg.save_uv:
-            mesh.unwrap_uv(self.cfg.xatlas_chart_options, self.cfg.xatlas_pack_options)
+        # Find what we iterate over. if we have a triangle count we iterate over that else the reduction.
+        # If neither is set we iterate over the mesh once.
+        # Also store which parameter we have used for the iteration in it
+        is_triangle_count = False
+        if self.cfg.mesh_simplification_triangle_count is not None:
+            it = self.cfg.mesh_simplification_triangle_count
+            is_triangle_count = True
+        elif self.cfg.mesh_simplification_reduction is not None:
+            it = self.cfg.mesh_simplification_reduction
+        else:
+            it = [None]
 
-        if self.cfg.save_texture:
-            threestudio.info("Exporting textures ...")
-            assert self.cfg.save_uv, "save_uv must be True when save_texture is True"
-            # clip space transform
-            uv_clip = mesh.v_tex * 2.0 - 1.0
-            # pad to four component coordinate
-            uv_clip4 = torch.cat(
-                (
-                    uv_clip,
-                    torch.zeros_like(uv_clip[..., 0:1]),
-                    torch.ones_like(uv_clip[..., 0:1]),
-                ),
-                dim=-1,
-            )
-            # rasterize
-            rast, _ = self.ctx.rasterize_one(
-                uv_clip4, mesh.t_tex_idx, (self.cfg.texture_size, self.cfg.texture_size)
-            )
+        for val in it:
+            params = {
+                "mesh": mesh,
+                "save_mat": True,
+                "save_normal": self.cfg.save_normal,
+                "save_uv": self.cfg.save_uv,
+                "save_vertex_color": False,
+                "map_Kd": None,  # Base Color
+                "map_Ks": None,  # Specular
+                "map_Bump": None,  # Normal
+                # ref: https://en.wikipedia.org/wiki/Wavefront_.obj_file#Physically-based_Rendering
+                "map_Pm": None,  # Metallic
+                "map_Pr": None,  # Roughness
+                "map_format": self.cfg.texture_format,
+            }
 
-            hole_mask = ~(rast[:, :, 3] > 0)
+            if self.cfg.clean_mesh:
+                threestudio.info("Cleaning mesh ...")
+                mesh = mesh.clean_mesh()
 
-            def uv_padding(image):
-                uv_padding_size = self.cfg.xatlas_pack_options.get("padding", 2)
-                inpaint_image = (
-                    cv2.inpaint(
-                        (image.detach().cpu().numpy() * 255).astype(np.uint8),
-                        (hole_mask.detach().cpu().numpy() * 255).astype(np.uint8),
-                        uv_padding_size,
-                        cv2.INPAINT_TELEA,
+            if val is not None and val > 0:
+                threestudio.info("Simplifying mesh ...")
+                if is_triangle_count:
+                    mesh = mesh.simplify(
+                        target_count=val,
                     )
-                    / 255.0
+                else:
+                    mesh = mesh.simplify(
+                        target_reduction=val,
+                    )
+                params["mesh"] = mesh
+
+            if self.cfg.remesh_mesh:
+                threestudio.info("Remeshing mesh ...")
+                mesh = mesh.remesh(**self.cfg.botsch_remesh_config)
+                params["mesh"] = mesh
+
+            if self.cfg.save_uv:
+                mesh.unwrap_uv(
+                    self.cfg.xatlas_chart_options, self.cfg.xatlas_pack_options
                 )
-                return torch.from_numpy(inpaint_image).to(image)
 
-            # Interpolate world space position
-            gb_pos, _ = self.ctx.interpolate_one(
-                mesh.v_pos, rast[None, ...], mesh.t_pos_idx
-            )
-            gb_pos = gb_pos[0]
-
-            # Sample out textures from MLP
-            geo_out = self.geometry.export(points=gb_pos)
-            mat_out = self.material.export(points=gb_pos, **geo_out)
-
-            threestudio.info(
-                "Perform UV padding on texture maps to avoid seams, may take a while ..."
-            )
-
-            if "albedo" in mat_out:
-                params["map_Kd"] = uv_padding(mat_out["albedo"])
-            else:
-                threestudio.warn(
-                    "save_texture is True but no albedo texture found, using default white texture"
+            if self.cfg.save_texture:
+                threestudio.info("Exporting textures ...")
+                assert (
+                    self.cfg.save_uv
+                ), "save_uv must be True when save_texture is True"
+                # clip space transform
+                uv_clip = mesh.v_tex * 2.0 - 1.0
+                # pad to four component coordinate
+                uv_clip4 = torch.cat(
+                    (
+                        uv_clip,
+                        torch.zeros_like(uv_clip[..., 0:1]),
+                        torch.ones_like(uv_clip[..., 0:1]),
+                    ),
+                    dim=-1,
                 )
-            if "metallic" in mat_out:
-                params["map_Pm"] = uv_padding(mat_out["metallic"])
-            if "roughness" in mat_out:
-                params["map_Pr"] = uv_padding(mat_out["roughness"])
-            if "bump" in mat_out:
-                params["map_Bump"] = uv_padding(mat_out["bump"])
-            # TODO: map_Ks
-        return [
-            ExporterOutput(
-                save_name=f"{self.cfg.save_name}.obj", save_type="obj", params=params
-            )
-        ]
+                # rasterize
+                rast, _ = self.ctx.rasterize_one(
+                    uv_clip4,
+                    mesh.t_tex_idx,
+                    (self.cfg.texture_size, self.cfg.texture_size),
+                )
+
+                hole_mask = ~(rast[:, :, 3] > 0)
+
+                def uv_padding(image):
+                    uv_padding_size = self.cfg.xatlas_pack_options.get("padding", 2)
+                    inpaint_image = (
+                        cv2.inpaint(
+                            (image.detach().cpu().numpy() * 255).astype(np.uint8),
+                            (hole_mask.detach().cpu().numpy() * 255).astype(np.uint8),
+                            uv_padding_size,
+                            cv2.INPAINT_TELEA,
+                        )
+                        / 255.0
+                    )
+                    return torch.from_numpy(inpaint_image).to(image)
+
+                # Interpolate world space position
+                gb_pos, _ = self.ctx.interpolate_one(
+                    mesh.v_pos, rast[None, ...], mesh.t_pos_idx
+                )
+                gb_pos = gb_pos[0]
+
+                # Sample out textures from MLP
+                geo_out = self.geometry.export(points=gb_pos)
+                mat_out = self.material.export(points=gb_pos, **geo_out)
+
+                threestudio.info(
+                    "Perform UV padding on texture maps to avoid seams, may take a while ..."
+                )
+
+                if "albedo" in mat_out:
+                    params["map_Kd"] = uv_padding(mat_out["albedo"])
+                else:
+                    threestudio.warn(
+                        "save_texture is True but no albedo texture found, using default white texture"
+                    )
+                if "metallic" in mat_out:
+                    params["map_Pm"] = uv_padding(mat_out["metallic"])
+                if "roughness" in mat_out:
+                    params["map_Pr"] = uv_padding(mat_out["roughness"])
+                if "bump" in mat_out:
+                    params["map_Bump"] = uv_padding(mat_out["bump"])
+                # TODO: map_Ks
+
+            folder = "" if val is None or val < 0 else f"{str(val).replace('.', '')}/"
+            name = f"{folder}{self.cfg.save_name}.obj"
+            ret.append(ExporterOutput(save_name=name, save_type="obj", params=params))
+        return ret
 
     def export_obj(self, mesh: Mesh) -> List[ExporterOutput]:
-        params = {
-            "mesh": mesh,
-            "save_mat": False,
-            "save_normal": self.cfg.save_normal,
-            "save_uv": self.cfg.save_uv,
-            "save_vertex_color": False,
-            "map_Kd": None,  # Base Color
-            "map_Ks": None,  # Specular
-            "map_Bump": None,  # Normal
-            # ref: https://en.wikipedia.org/wiki/Wavefront_.obj_file#Physically-based_Rendering
-            "map_Pm": None,  # Metallic
-            "map_Pr": None,  # Roughness
-            "map_format": self.cfg.texture_format,
-        }
+        ret = []
 
-        if self.cfg.save_uv:
-            mesh.unwrap_uv(self.cfg.xatlas_chart_options, self.cfg.xatlas_pack_options)
+        # Find what we iterate over. if we have a triangle count we iterate over that else the reduction.
+        # If neither is set we iterate over the mesh once.
+        # Also store which parameter we have used for the iteration in it
+        is_triangle_count = False
+        if self.cfg.mesh_simplification_triangle_count is not None:
+            it = self.cfg.mesh_simplification_triangle_count
+            is_triangle_count = True
+        elif self.cfg.mesh_simplification_reduction is not None:
+            it = self.cfg.mesh_simplification_reduction
+        else:
+            it = [None]
 
-        if self.cfg.save_texture:
-            threestudio.info("Exporting textures ...")
-            geo_out = self.geometry.export(points=mesh.v_pos)
-            mat_out = self.material.export(points=mesh.v_pos, **geo_out)
+        for val in it:
+            params = {
+                "mesh": mesh,
+                "save_mat": False,
+                "save_normal": self.cfg.save_normal,
+                "save_uv": self.cfg.save_uv,
+                "save_vertex_color": False,
+                "map_Kd": None,  # Base Color
+                "map_Ks": None,  # Specular
+                "map_Bump": None,  # Normal
+                # ref: https://en.wikipedia.org/wiki/Wavefront_.obj_file#Physically-based_Rendering
+                "map_Pm": None,  # Metallic
+                "map_Pr": None,  # Roughness
+                "map_format": self.cfg.texture_format,
+            }
 
-            if "albedo" in mat_out:
-                mesh.set_vertex_color(mat_out["albedo"])
-                params["save_vertex_color"] = True
-            else:
-                threestudio.warn(
-                    "save_texture is True but no albedo texture found, not saving vertex color"
+            if val is not None and val > 0:
+                threestudio.info("Simplifying mesh ...")
+                if is_triangle_count:
+                    mesh = mesh.simplify(
+                        target_count=val,
+                    )
+                else:
+                    mesh = mesh.simplify(
+                        target_reduction=val,
+                    )
+                params["mesh"] = mesh
+
+            if self.cfg.remesh_mesh:
+                threestudio.info("Remeshing mesh ...")
+                mesh = mesh.remesh(**self.cfg.botsch_remesh_config)
+                params["mesh"] = mesh
+
+            if self.cfg.save_uv:
+                mesh.unwrap_uv(
+                    self.cfg.xatlas_chart_options, self.cfg.xatlas_pack_options
                 )
 
-        return [
-            ExporterOutput(
-                save_name=f"{self.cfg.save_name}.obj", save_type="obj", params=params
-            )
-        ]
+            if self.cfg.save_texture:
+                threestudio.info("Exporting textures ...")
+                geo_out = self.geometry.export(points=mesh.v_pos)
+                mat_out = self.material.export(points=mesh.v_pos, **geo_out)
+
+                if "albedo" in mat_out:
+                    mesh.set_vertex_color(mat_out["albedo"])
+                    params["save_vertex_color"] = True
+                else:
+                    threestudio.warn(
+                        "save_texture is True but no albedo texture found, not saving vertex color"
+                    )
+
+            append = "" if val is None or val < 0 else f"_{val}"
+            name = f"{self.cfg.save_name}{append}.obj"
+            ret.append(ExporterOutput(save_name=name, save_type="obj", params=params))
+
+        return ret

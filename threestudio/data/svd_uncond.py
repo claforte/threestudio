@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader, Dataset, IterableDataset
 
 import threestudio
 from threestudio import register
-from threestudio.data.uncond import RandomCameraDataset, gen_drunk_loop
+from threestudio.data.uncond import RandomCameraDataset, gen_drunk_loop, gen_elev_loop
 from threestudio.utils.base import Updateable
 from threestudio.utils.config import parse_structured
 from threestudio.utils.misc import get_device
@@ -261,14 +261,15 @@ class SVDCameraIterableDataset(IterableDataset, Updateable):
         )
 
         if self.cfg.use_random_orbit:
-            # azimuth, elevation = gen_drunk_loop(
-            #     length=self.n_views,
-            #     elev_deg=self.cond_elevation_deg,
-            # )
             azimuth, elevation = gen_drunk_loop(
-                length=21,
+                length=self.n_views,
                 elev_deg=self.cond_elevation_deg,
             )
+            # azimuth, elevation = gen_elev_loop(
+            #     length=21,
+            #     elev=self.cond_elevation_deg*np.pi/180,
+            #     # elev_deg=self.cond_elevation_deg,
+            # )
             azimuth = azimuth[-self.n_views :]
             elevation = elevation[-self.n_views :]
             azimuth = torch.from_numpy(azimuth).to(torch.float32)

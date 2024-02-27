@@ -79,6 +79,9 @@ class MultiviewsDataModuleConfig:
     camera_distance: float = -1
     eval_interpolation: Optional[Tuple[int, int, int]] = None  # (0, 1, 30)
 
+    use_omnidata_normals: bool = False
+    omnidata_normal_path: str = ""
+
     eval_height: int = 576
     eval_width: int = 576
     n_views: int = 21
@@ -108,9 +111,9 @@ class MultiviewsDataModuleConfig:
     random_camera: dict = field(default_factory=dict)
     train_on_gt: bool = False
     use_gt_orbit: bool = True
+    sober_or_drunk: str = None
     sober_orbit_path: str = None
     drunk_orbit_path: str = None
-    train_orbit_path: str = None
 
 
 class MultiviewIterableDataset(IterableDataset, Updateable):
@@ -135,6 +138,7 @@ class MultiviewIterableDataset(IterableDataset, Updateable):
         frames_direction = []
         frames_img = []
         frames_mask = []
+        frames_normal = []
 
         self.rank = get_rank()
         self.frame_w = frames[0]["w"] // scale
@@ -169,8 +173,13 @@ class MultiviewIterableDataset(IterableDataset, Updateable):
                 f"Unknown camera layout {self.cfg.camera_layout}. Now support only around and front."
             )
 
+        train_orbit_path = (
+            self.cfg.sober_orbit_path
+            if self.cfg.sober_or_drunk == "sober"
+            else self.cfg.drunk_orbit_path
+        )
         gt_frame_paths = sorted(
-            glob.glob(os.path.join(self.cfg.train_orbit_path, "rgba", "*.png"))
+            glob.glob(os.path.join(train_orbit_path, "rgba", "*.png"))
         )
 
         for idx, frame in tqdm(enumerate(frames)):
@@ -206,6 +215,31 @@ class MultiviewIterableDataset(IterableDataset, Updateable):
             # mask: Float[Tensor, "H W 1"] = torch.from_numpy(rgba[..., 3:] > 0.5).to(self.rank)
             frames_img.append(img)
 
+            if self.cfg.use_omnidata_normals:
+                normal_path = os.path.join(
+                    self.cfg.omnidata_normal_path,
+                    os.path.splitext(frame["file_path"])[0] + "_normal.hdr",
+                )
+                normal = cv2.cvtColor(
+                    cv2.imread(normal_path, cv2.IMREAD_UNCHANGED)[..., :3],
+                    cv2.COLOR_BGR2RGB,
+                )
+                # normal = cv2.imread(normal_path, cv2.IMREAD_UNCHANGED)[..., :3]
+                normal = cv2.resize(normal, (self.frame_w, self.frame_h)).astype(
+                    np.float32
+                )
+                normal = torch.FloatTensor(normal).to(self.rank) * 2 - 1
+
+                # Get c2w and transform normals
+                c2w = c2w_list[idx]
+
+                c2w_opengl = c2w[:3, :3] @ torch.diag(torch.tensor([1.0, -1.0, -1.0]))
+
+                normal = torch.einsum("ij,hwj->hwi", c2w_opengl.to(self.rank), normal)
+                normal = normal / torch.norm(normal, dim=-1, keepdim=True)
+
+                frames_normal.append(normal * 0.5 + 0.5)
+
             direction: Float[Tensor, "H W 3"] = get_ray_directions(
                 self.frame_h,
                 self.frame_w,
@@ -236,6 +270,11 @@ class MultiviewIterableDataset(IterableDataset, Updateable):
         )
         self.frames_img: Float[Tensor, "B H W 3"] = torch.stack(frames_img, dim=0)
         self.frames_mask = torch.stack(frames_mask, dim=0)
+
+        if frames_normal != []:
+            self.frames_normal: Float[Tensor, "B H W 3"] = torch.stack(
+                frames_normal, dim=0
+            )
 
         self.rays_o, self.rays_d = get_rays(
             self.frames_direction, self.frames_c2w, keepdim=True
@@ -284,6 +323,8 @@ class MultiviewIterableDataset(IterableDataset, Updateable):
             "height": self.frame_h,
             "width": self.frame_w,
         }
+        if self.cfg.use_omnidata_normals:
+            batch["ref_normal"] = self.frames_normal[index]
         if self.cfg.use_random_camera:
             batch["random_camera"] = self.random_pose_generator.collate(None)
 
@@ -382,8 +423,13 @@ class MultiviewDataset(Dataset):
                 frames_position.append(camera_position)
                 frames_direction.append(direction)
         else:
+            train_orbit_path = (
+                self.cfg.sober_orbit_path
+                if self.cfg.sober_or_drunk == "sober"
+                else self.cfg.drunk_orbit_path
+            )
             gt_frame_paths = sorted(
-                glob.glob(os.path.join(self.cfg.train_orbit_path, "rgba", "*.png"))
+                glob.glob(os.path.join(train_orbit_path, "rgba", "*.png"))
             )
 
             for idx, frame in tqdm(enumerate(frames)):

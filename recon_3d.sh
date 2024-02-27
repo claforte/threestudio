@@ -1,10 +1,44 @@
 
-for dir in ../GSO_sober21/*/; \
-do (python launch.py --export --gpu 0 --config configs/kplanes_sober_no_sds.yaml \
-resume=outputs/GSO_drunk_no_sds_hr/$(basename -- $dir)/ckpts/last.ckpt \
-system.exporter_type=mesh-exporter system.exporter.fmt=obj system.geometry.isosurface_threshold=10. \
-system.exporter.save_uv=false name=GSO_drunk_no_sds_hr tag=$(basename -- $dir)); done
+# for dir in ../GSO_sober21/*/; \
+# do (python launch.py --export --gpu 0 --config configs/kplanes_sober_no_sds.yaml \
+# resume=outputs/GSO_drunk_no_sds_hr/$(basename -- $dir)/ckpts/last.ckpt \
+# system.exporter_type=mesh-exporter system.exporter.fmt=obj system.geometry.isosurface_threshold=10. \
+# system.exporter.save_uv=false name=GSO_drunk_no_sds_hr tag=$(basename -- $dir)); done
 
+
+CUDA_VISIBLE_DEVICES=0 python launch.py --train --config=configs/kplanes_sds_mark.yaml name=GSO_hashgrid_drunk_sds tag=CHICKEN_RACER \
+    data.sober_or_drunk=drunk data.omnidata_normal_path=/weka/home-chunhanyao/GSO_mark/GSO_DRUNK_21/CHICKEN_RACER/mono_normal/
+
+CUDA_VISIBLE_DEVICES=0 python launch.py --train --config=configs/kplanes_sds_refine_mark.yaml \
+    system.geometry_convert_from=outputs/GSO_hashgrid_drunk_sds/CHICKEN_RACER/ckpts/last.ckpt \
+    name=GSO_hashgrid_drunk_sds_refine tag=CHICKEN_RACER data.sober_or_drunk=drunk \
+    data.omnidata_normal_path=/weka/home-chunhanyao/GSO_mark/GSO_DRUNK_21/CHICKEN_RACER/mono_normal/
+
+python launch.py --export --config=configs/kplanes_sds_refine_mark.yaml \
+    system.geometry_convert_from=outputs/GSO_hashgrid_drunk_sds_refine/CHICKEN_RACER/ckpts/last.ckpt \
+    system.exporter_type=mesh-exporter system.exporter.remesh_mesh=True system.exporter.clean_mesh=True \
+    name=GSO_hashgrid_drunk_sds_refine tag=CHICKEN_RACER
+
+
+
+CUDA_VISIBLE_DEVICES=4,6 python launch.py --train --config=configs/kplanes_no_sds_mark.yaml name=GSO_hashgrid_drunk_no_sds tag=CHICKEN_RACER \
+    data.sober_or_drunk=drunk data.omnidata_normal_path=/weka/home-markboss/GSO_DRUNK_21/CHICKEN_RACER/mono_normal/
+
+CUDA_VISIBLE_DEVICES=4 python launch.py --train --config=configs/kplanes_no_sds_refine_mark.yaml \
+    system.geometry_convert_from=outputs/GSO_hashgrid_drunk_no_sds/CHICKEN_RACER/ckpts/last.ckpt \
+    name=GSO_hashgrid_drunk_no_sds_refine tag=CHICKEN_RACER data.sober_or_drunk=drunk \
+    data.omnidata_normal_path=/weka/home-markboss/GSO_DRUNK_21/CHICKEN_RACER/mono_normal/
+
+
+python launch.py --export --config=configs/kplanes_no_sds_mark.yaml \
+    system.geometry_convert_from=outputs/GSO_hashgrid_drunk_no_sds/CHICKEN_RACER/ckpts/last.ckpt \
+    system.exporter_type=mesh-exporter system.exporter.remesh_mesh=True system.exporter.clean_mesh=True \
+    name=GSO_hashgrid_drunk_no_sds tag=CHICKEN_RACER system.geometry.isosurface_threshold=50.
+
+python launch.py --export --config=configs/kplanes_no_sds_refine_mark.yaml \
+    system.geometry_convert_from=outputs/GSO_hashgrid_drunk_no_sds_refine/CHICKEN_RACER/ckpts/last.ckpt \
+    system.exporter_type=mesh-exporter system.exporter.remesh_mesh=True system.exporter.clean_mesh=True \
+    name=GSO_hashgrid_drunk_no_sds_refine tag=CHICKEN_RACER
 
 # ==========================
 # ========= Recon ==========

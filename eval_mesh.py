@@ -52,6 +52,9 @@ def get_chamfer_iou(mesh_pr, mesh_gt, vis_align=False):
         ax.set_xlim(-0.5, 0.5)
         ax.set_ylim(-0.5, 0.5)
         ax.set_zlim(-0.5, 0.5)
+        ax.set_xlabel("$X$")
+        ax.set_ylabel("$Y$")
+        ax.set_zlabel("$Z$")
         plt.savefig("scatter.png")
 
     # compute iou
@@ -82,19 +85,25 @@ def eval_one_mesh(
     vertices_pr = np.asarray(mesh_pr.vertices)
 
     if rigid_align:
-        print(azim, elev)
+        print(azim * 180 / np.pi, elev * 180 / np.pi)
         # SV3D
         rot_mat = R.from_rotvec(np.array([0, 0, -np.pi / 2 + azim])).as_matrix()
+        # Stable zero123
+        # rot_mat = R.from_rotvec(np.array([0, 0, -np.pi / 2])).as_matrix()
         # One-2345
         # rot_mat = R.from_rotvec(np.array([np.pi/2, azim, -elev])).as_matrix()
         # rot_mat = R.from_rotvec(np.array([np.pi/2, -elev, azim])).as_matrix()
-        # Shap-E
-        # rot_mat = R.from_rotvec(np.array([0, 0, -np.pi/2+azim])).as_matrix()
+        # Point-E & Shap-E
+        # rot_mat = R.from_rotvec(np.array([0, elev, azim])).as_matrix()
+        # rot_mat = R.from_rotvec(np.array([0, 0, 0])).as_matrix()
         # DreamGaussian & One-2345
         # rot_mat = R.from_rotvec(np.array([np.pi/2, 0, 0])).as_matrix()
         # rot_mat2 = R.from_rotvec(np.array([0, 0, azim])).as_matrix()
         # rot_mat3 = R.from_rotvec(np.array([0, -elev, 0])).as_matrix()
         # rot_mat = np.matmul(rot_mat3, np.matmul(rot_mat2, rot_mat))
+        # rot_mat = R.from_rotvec(np.array([np.pi/2, 0, 0])).as_matrix()
+        # rot_mat2 = R.from_rotvec(np.array([0, 0, azim])).as_matrix()
+        # rot_mat = np.matmul(rot_mat2, rot_mat)
 
         trans_init = np.asarray(
             [
@@ -155,8 +164,10 @@ def main():
 
     for i, gt_obj in enumerate(gt_objs):
         obj_name = gt_obj.split("/")[-2]
-        pr_obj = os.path.join(args.pr_dir, obj_name, "save", "model.obj")
-        # pr_obj = args.pr_dir.replace("*", obj_name)
+        if args.pr_dir.endswith(".obj"):
+            pr_obj = args.pr_dir.replace("*", obj_name)
+        else:
+            pr_obj = os.path.join(args.pr_dir, obj_name, "save", "model.obj")
         transform_file = os.path.join(args.transform_dir, obj_name, "frame_0020.json")
         if os.path.exists(pr_obj):
             transforms = json.load(open(transform_file, "r"))
@@ -169,6 +180,8 @@ def main():
             print_result = f"{obj_name}: Chamfer={chamfer:.5f}, Volume IOU={iou:.5f}\n"
             results += print_result
             print(print_result)
+
+            # break
 
     print(len(chamfer_list))
     chamfer_mean = np.mean(np.array(chamfer_list))

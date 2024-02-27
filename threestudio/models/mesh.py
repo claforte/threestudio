@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import fast_simplification
+import gpytoolbox
 import numpy as np
+import pymeshlab
 import torch
 import torch.nn.functional as F
 
@@ -27,6 +30,306 @@ class Mesh:
 
     def add_extra(self, k, v) -> None:
         self.extras[k] = v
+
+    def simplify(
+        self, target_reduction: float = None, target_count: int = None
+    ) -> Mesh:
+        if target_reduction is None and target_count is None:
+            raise ValueError(
+                "Either target_reduction or target_count must be specified"
+            )
+
+        # Check that only self.v_pos and self.t_pos_idx are used
+        if len(self.extras) > 0:
+            threestudio.warn(
+                f"The following extra attributes are ignored during simplification: {list(self.extras.keys())}"
+            )
+        if self._v_nrm is not None:
+            threestudio.warn("Vertex normals are ignored during simplification")
+        if self._v_tng is not None:
+            threestudio.warn("Vertex tangents are ignored during simplification")
+        if self._v_tex is not None:
+            threestudio.warn(
+                "Vertex texture coordinates are ignored during simplification"
+            )
+        if self._t_tex_idx is not None:
+            threestudio.warn(
+                "Triangle texture coordinates are ignored during simplification"
+            )
+        if self._v_rgb is not None:
+            threestudio.warn("Vertex colors are ignored during simplification")
+        if self._edges is not None:
+            threestudio.warn("Edges are ignored during simplification")
+
+        # Convert to numpy
+        v_pos = self.v_pos.detach().cpu().numpy().astype(np.float32)
+        t_pos_idx = self.t_pos_idx.detach().cpu().numpy().astype(np.int64)
+
+        # Simplify
+        points_out, faces_out = fast_simplification.simplify(
+            v_pos,
+            t_pos_idx,
+            target_reduction=target_reduction,
+            target_count=target_count,
+        )
+
+        # Convert back to torch
+        v_pos = torch.from_numpy(points_out).to(self.v_pos).contiguous()
+        t_pos_idx = torch.from_numpy(faces_out).to(self.t_pos_idx).contiguous()
+
+        # Create new mesh
+        simplified_mesh = Mesh(v_pos, t_pos_idx)
+        # keep the extras unchanged
+
+        return simplified_mesh
+
+    def fix_non_manifold_mesh(self) -> Mesh:
+        # Check that only self.v_pos and self.t_pos_idx are used
+        if len(self.extras) > 0:
+            threestudio.warn(
+                f"The following extra attributes are ignored during simplification: {list(self.extras.keys())}"
+            )
+        if self._v_nrm is not None:
+            threestudio.warn("Vertex normals are ignored during simplification")
+        if self._v_tng is not None:
+            threestudio.warn("Vertex tangents are ignored during simplification")
+        if self._v_tex is not None:
+            threestudio.warn(
+                "Vertex texture coordinates are ignored during simplification"
+            )
+        if self._t_tex_idx is not None:
+            threestudio.warn(
+                "Triangle texture coordinates are ignored during simplification"
+            )
+        if self._v_rgb is not None:
+            threestudio.warn("Vertex colors are ignored during simplification")
+        if self._edges is not None:
+            threestudio.warn("Edges are ignored during simplification")
+
+        v_pos = self.v_pos.detach().cpu().numpy().astype(np.float64)
+        t_pos_idx = self.t_pos_idx.detach().cpu().numpy().astype(np.int32)
+
+        # Load pylabmesh
+        m = pymeshlab.Mesh(v_pos, t_pos_idx)
+        ms = pymeshlab.MeshSet()
+        ms.add_mesh(m, "generated")
+
+        # Fix mesh
+        ms.meshing_repair_non_manifold_edges(method=0)
+        ms.meshing_repair_non_manifold_vertices()
+
+        # Apply fixes to new mesh
+        m = ms.current_mesh()
+        v_pos = m.vertex_matrix()
+        t_pos_idx = m.face_matrix()
+
+        v_pos = torch.from_numpy(v_pos).to(self.v_pos).contiguous()
+        t_pos_idx = torch.from_numpy(t_pos_idx).to(self.t_pos_idx).contiguous()
+        return Mesh(v_pos, t_pos_idx)
+
+    def clean_mesh(self) -> Mesh:
+        if len(self.extras) > 0:
+            threestudio.warn(
+                f"The following extra attributes are ignored during simplification: {list(self.extras.keys())}"
+            )
+        if self._v_nrm is not None:
+            threestudio.warn("Vertex normals are ignored during simplification")
+        if self._v_tng is not None:
+            threestudio.warn("Vertex tangents are ignored during simplification")
+        if self._v_tex is not None:
+            threestudio.warn(
+                "Vertex texture coordinates are ignored during simplification"
+            )
+        if self._t_tex_idx is not None:
+            threestudio.warn(
+                "Triangle texture coordinates are ignored during simplification"
+            )
+        if self._v_rgb is not None:
+            threestudio.warn("Vertex colors are ignored during simplification")
+        if self._edges is not None:
+            threestudio.warn("Edges are ignored during simplification")
+
+        v_pos = self.v_pos.detach().cpu().numpy().astype(np.float64)
+        t_pos_idx = self.t_pos_idx.detach().cpu().numpy().astype(np.int32)
+
+        # Load pylabmesh
+        m = pymeshlab.Mesh(v_pos, t_pos_idx)
+        ms = pymeshlab.MeshSet()
+        ms.add_mesh(m, "generated")
+
+        # Handle floaters
+        p = pymeshlab.PercentageValue(20)
+        ms.meshing_remove_connected_component_by_diameter(mincomponentdiag=p)
+
+        ms.meshing_repair_non_manifold_edges(method=0)
+        ms.meshing_repair_non_manifold_vertices()
+
+        # Apply fixes to new mesh
+        m = ms.current_mesh()
+        v_pos = m.vertex_matrix()
+        t_pos_idx = m.face_matrix()
+
+        v_pos = torch.from_numpy(v_pos).to(self.v_pos).contiguous()
+        t_pos_idx = torch.from_numpy(t_pos_idx).to(self.t_pos_idx).contiguous()
+        return Mesh(v_pos, t_pos_idx)
+
+    def close_holes(self) -> Mesh:
+        if len(self.extras) > 0:
+            threestudio.warn(
+                f"The following extra attributes are ignored during simplification: {list(self.extras.keys())}"
+            )
+        if self._v_nrm is not None:
+            threestudio.warn("Vertex normals are ignored during simplification")
+        if self._v_tng is not None:
+            threestudio.warn("Vertex tangents are ignored during simplification")
+        if self._v_tex is not None:
+            threestudio.warn(
+                "Vertex texture coordinates are ignored during simplification"
+            )
+        if self._t_tex_idx is not None:
+            threestudio.warn(
+                "Triangle texture coordinates are ignored during simplification"
+            )
+        if self._v_rgb is not None:
+            threestudio.warn("Vertex colors are ignored during simplification")
+        if self._edges is not None:
+            threestudio.warn("Edges are ignored during simplification")
+
+        v_pos = self.v_pos.detach().cpu().numpy().astype(np.float64)
+        t_pos_idx = self.t_pos_idx.detach().cpu().numpy().astype(np.int32)
+
+        # Load pylabmesh
+        m = pymeshlab.Mesh(v_pos, t_pos_idx)
+        ms = pymeshlab.MeshSet()
+        ms.add_mesh(m, "generated")
+
+        # num_eges = (t_pos_idx.shape[0] // 3) // 10
+        ms.meshing_close_holes()  # maxholesize=num_eges)
+
+        # Apply fixes to new mesh
+        m = ms.current_mesh()
+        v_pos = m.vertex_matrix()
+        t_pos_idx = m.face_matrix()
+
+        v_pos = torch.from_numpy(v_pos).to(self.v_pos).contiguous()
+        t_pos_idx = torch.from_numpy(t_pos_idx).to(self.t_pos_idx).contiguous()
+        return Mesh(v_pos, t_pos_idx)
+
+    def remesh(
+        self, average_edge_length_multiplier: float = 1.0, remesh_steps: int = 10
+    ) -> Mesh:
+        # Check that only self.v_pos and self.t_pos_idx are used
+        if len(self.extras) > 0:
+            threestudio.warn(
+                f"The following extra attributes are ignored during simplification: {list(self.extras.keys())}"
+            )
+        if self._v_nrm is not None:
+            threestudio.warn("Vertex normals are ignored during simplification")
+        if self._v_tng is not None:
+            threestudio.warn("Vertex tangents are ignored during simplification")
+        if self._v_tex is not None:
+            threestudio.warn(
+                "Vertex texture coordinates are ignored during simplification"
+            )
+        if self._t_tex_idx is not None:
+            threestudio.warn(
+                "Triangle texture coordinates are ignored during simplification"
+            )
+        if self._v_rgb is not None:
+            threestudio.warn("Vertex colors are ignored during simplification")
+        if self._edges is not None:
+            threestudio.warn("Edges are ignored during simplification")
+
+        # Convert to numpy
+        v_pos = self.v_pos.detach().cpu().numpy().astype(np.float64)
+        t_pos_idx = self.t_pos_idx.detach().cpu().numpy().astype(np.int32)
+
+        # Remesh
+
+        # Check if mesh is non manifold:
+        ne = gpytoolbox.non_manifold_edges(t_pos_idx)
+        if len(ne) > 0:
+            # Try to fix with pymeshlab
+            threestudio.warn(
+                "Mesh is non manifold, trying to fix with pymeshlab. Non manifold edges: {}".format(
+                    ne
+                )
+            )
+
+            try:
+                fixed_mesh = self.fix_non_manifold_mesh()
+            except Exception as e:
+                threestudio.warn(
+                    f"Failed to fix non manifold mesh with pymeshlab: {e}. Returning original mesh"
+                )
+                return self
+            v_pos = fixed_mesh.v_pos.detach().cpu().numpy().astype(np.float64)
+            t_pos_idx = fixed_mesh.t_pos_idx.detach().cpu().numpy().astype(np.int32)
+
+            ne = gpytoolbox.non_manifold_edges(t_pos_idx)
+            if len(ne) > 0:
+                threestudio.warn(
+                    "Mesh is still non manifold after pymeshlab. Non manifold edges: {}".format(
+                        ne
+                    )
+                )
+                return self
+
+        # Check if mesh is closed
+        be = gpytoolbox.boundary_edges(t_pos_idx)
+        if len(be) > 0:
+            threestudio.warn(
+                "Mesh is not closed, tying to fix with pymeshlab. Boundary edges: {}".format(
+                    be
+                )
+            )
+
+            try:
+                fixed_mesh = self.close_holes()
+            except Exception as e:
+                threestudio.warn(
+                    f"Failed to close holes with pymeshlab: {e}. Returning original mesh"
+                )
+                return self
+
+            v_pos = fixed_mesh.v_pos.detach().cpu().numpy().astype(np.float64)
+            t_pos_idx = fixed_mesh.t_pos_idx.detach().cpu().numpy().astype(np.int32)
+
+            be = gpytoolbox.boundary_edges(t_pos_idx)
+            if len(be) > 0:
+                threestudio.warn(
+                    "Mesh is still not closed after pymeshlab. Boundary edges: {}".format(
+                        be
+                    )
+                )
+                return self
+
+        edges = self.edges
+        average_edge_length = (
+            torch.linalg.norm(self.v_pos[edges[:, 0]] - self.v_pos[edges[:, 1]], dim=1)
+            .mean()
+            .item()
+        )
+
+        threestudio.info(
+            f"Remeshing with {average_edge_length * average_edge_length_multiplier} as target edge length and {remesh_steps} steps"
+        )
+        v_remesh, f_remesh = gpytoolbox.remesh_botsch(
+            v_pos,
+            t_pos_idx,
+            remesh_steps,
+            float(average_edge_length * average_edge_length_multiplier),
+        )
+
+        # Convert back to torch
+        v_pos = torch.from_numpy(v_remesh).to(self.v_pos).contiguous()
+        t_pos_idx = torch.from_numpy(f_remesh).to(self.t_pos_idx).contiguous()
+
+        # Create new mesh
+        remeshed_mesh = Mesh(v_pos, t_pos_idx)
+        # keep the extras unchanged
+
+        return remeshed_mesh
 
     def remove_outlier(self, outlier_n_faces_threshold: Union[int, float]) -> Mesh:
         if self.requires_grad:

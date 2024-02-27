@@ -54,8 +54,10 @@ class ImplicitVolume(BaseImplicitGeometry):
         )
         normal_type: Optional[
             str
-        ] = "finite_difference"  # in ['pred', 'finite_difference', 'finite_difference_laplacian']
-        finite_difference_normal_eps: float = 0.01
+        ] = "finite_difference"  # in ['pred', 'finite_difference', 'finite_difference_laplacian', 'analytic']
+        finite_difference_normal_eps: Union[
+            float, str
+        ] = 0.01  # in [float, "progressive"]
 
         # automatically determine the threshold
         isosurface_threshold: Union[float, str] = 25.0
@@ -81,23 +83,7 @@ class ImplicitVolume(BaseImplicitGeometry):
                 self.encoding.n_output_dims, 3, self.cfg.mlp_network_config
             )
 
-        # define here to avoid cpu-to-gpu synchronization if created inline
-        eps = self.cfg.finite_difference_normal_eps
-        self.OFFSET_FINITE_DIFFERENCE_LAPLACIAN = torch.as_tensor(
-            [
-                [eps, 0.0, 0.0],
-                [-eps, 0.0, 0.0],
-                [0.0, eps, 0.0],
-                [0.0, -eps, 0.0],
-                [0.0, 0.0, eps],
-                [0.0, 0.0, -eps],
-            ],
-            device=f"cuda:{get_rank()}",
-        )
-        self.OFFSET_FINITE_DIFFERENCE = torch.as_tensor(
-            [[eps, 0.0, 0.0], [0.0, eps, 0.0], [0.0, 0.0, eps]],
-            device=f"cuda:{get_rank()}",
-        )
+        self.finite_difference_normal_eps: Optional[float] = None
 
     def get_activated_density(
         self, points: Float[Tensor, "*N Di"], density: Float[Tensor, "*N 1"]
@@ -173,12 +159,25 @@ class ImplicitVolume(BaseImplicitGeometry):
                 self.cfg.normal_type == "finite_difference"
                 or self.cfg.normal_type == "finite_difference_laplacian"
             ):
+                assert self.finite_difference_normal_eps is not None
+                eps: float = self.finite_difference_normal_eps
+
                 # TODO: use raw density
-                eps = self.cfg.finite_difference_normal_eps
                 if self.cfg.normal_type == "finite_difference_laplacian":
+                    offsets: Float[Tensor, "6 3"] = torch.as_tensor(
+                        [
+                            [eps, 0.0, 0.0],
+                            [-eps, 0.0, 0.0],
+                            [0.0, eps, 0.0],
+                            [0.0, -eps, 0.0],
+                            [0.0, 0.0, eps],
+                            [0.0, 0.0, -eps],
+                        ],
+                        dtype=points_unscaled.dtype,
+                        device=points_unscaled.device,
+                    )
                     points_offset: Float[Tensor, "... 6 3"] = (
-                        points_unscaled[..., None, :]
-                        + self.OFFSET_FINITE_DIFFERENCE_LAPLACIAN
+                        points_unscaled[..., None, :] + offsets
                     ).clamp(-self.cfg.radius, self.cfg.radius)
                     density_offset: Float[Tensor, "... 6 1"] = self.forward_density(
                         points_offset
@@ -189,8 +188,13 @@ class ImplicitVolume(BaseImplicitGeometry):
                         / eps
                     )
                 else:
+                    offsets: Float[Tensor, "3 3"] = torch.as_tensor(
+                        [[eps, 0.0, 0.0], [0.0, eps, 0.0], [0.0, 0.0, eps]],
+                        dtype=points_unscaled.dtype,
+                        device=points_unscaled.device,
+                    )
                     points_offset: Float[Tensor, "... 3 3"] = (
-                        points_unscaled[..., None, :] + self.OFFSET_FINITE_DIFFERENCE
+                        points_unscaled[..., None, :] + offsets
                     ).clamp(-self.cfg.radius, self.cfg.radius)
                     density_offset: Float[Tensor, "... 3 1"] = self.forward_density(
                         points_offset
@@ -268,6 +272,41 @@ class ImplicitVolume(BaseImplicitGeometry):
             }
         )
         return out
+
+    def update_step(self, epoch: int, global_step: int, on_load_weights: bool = False):
+        if (
+            self.cfg.normal_type == "finite_difference"
+            or self.cfg.normal_type == "finite_difference_laplacian"
+        ):
+            if isinstance(self.cfg.finite_difference_normal_eps, float):
+                self.finite_difference_normal_eps = (
+                    self.cfg.finite_difference_normal_eps
+                )
+            elif self.cfg.finite_difference_normal_eps == "progressive":
+                # progressive finite difference eps from Neuralangelo
+                # https://arxiv.org/abs/2306.03092
+                hg_conf: Any = self.cfg.pos_encoding_config
+                assert (
+                    hg_conf.otype == "ProgressiveBandHashGrid"
+                ), "finite_difference_normal_eps=progressive only works with ProgressiveBandHashGrid"
+                current_level = min(
+                    hg_conf.start_level
+                    + max(global_step - hg_conf.start_step, 0) // hg_conf.update_steps,
+                    hg_conf.n_levels,
+                )
+                grid_res = hg_conf.base_resolution * hg_conf.per_level_scale ** (
+                    current_level - 1
+                )
+                grid_size = 2 * self.cfg.radius / grid_res
+                if grid_size != self.finite_difference_normal_eps:
+                    threestudio.info(
+                        f"Update finite_difference_normal_eps to {grid_size}"
+                    )
+                self.finite_difference_normal_eps = grid_size
+            else:
+                raise ValueError(
+                    f"Unknown finite_difference_normal_eps={self.cfg.finite_difference_normal_eps}"
+                )
 
     @staticmethod
     @torch.no_grad()

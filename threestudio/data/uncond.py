@@ -101,6 +101,26 @@ def gen_drunk_loop(length=21, elev_deg=0):
     return np.roll(azim_rad, -1), np.roll(elev_rad, -1)
 
 
+# def gen_elev_loop(length=21, elev_deg=0):
+#     azim = np.zeros(length)
+#     elev = np.linspace(elev_deg, elev_deg+360, length+1)[1:]
+#     elev[elev > 180] = elev[elev > 180] - 360
+#     azim[elev > 90] = np.pi
+#     azim[elev <= -90] = np.pi
+#     elev[elev > 90] = 180 - elev[elev > 90]
+#     elev[elev <= -90] = - 180 - elev[elev <= -90]
+#     azim_rad = np.deg2rad(azim)
+#     elev_rad = np.deg2rad(elev)
+#     return azim_rad, elev_rad
+
+
+def gen_elev_loop(length=21, elev=0):
+    phase = np.arcsin(elev)
+    azim = np.linspace(0, np.pi * 2, length + 1)[1:]
+    elev = np.sin(azim + phase)
+    return azim, elev
+
+
 @dataclass
 class RandomCameraDataModuleConfig:
     # height, width, and batch_size should be Union[int, List[int]]
@@ -134,9 +154,9 @@ class RandomCameraDataModuleConfig:
     progressive_until: int = 0  # progressive ranges for elevation, azimuth, r, fovy
 
     use_gt_orbit: bool = True
+    sober_or_drunk: str = None
     sober_orbit_path: str = None
     drunk_orbit_path: str = None
-    train_orbit_path: str = None
 
 
 class RandomCameraIterableDataset(IterableDataset, Updateable):
@@ -450,8 +470,8 @@ class RandomCameraDataset(Dataset):
                 azimuths.append(d["azimuth"])
                 camera_distances.append(d["camera_dist"])
 
-            random_azimuths, random_elevations = gen_drunk_loop(
-                length=self.n_views, elev_deg=elevations[41]
+            random_azimuths, random_elevations = gen_elev_loop(
+                length=self.n_views, elev=0  # elevations[41]
             )
             for azim, elev in zip(random_azimuths, random_elevations):
                 elevations.append(elev)
@@ -462,7 +482,7 @@ class RandomCameraDataset(Dataset):
             elevation = torch.tensor(elevations).float()
             azimuth = torch.tensor(azimuths).float()
 
-            if "drunk" in self.cfg.train_orbit_path:
+            if self.cfg.sober_or_drunk == "drunk":
                 azimuth[42:] = azimuth[42:] - azimuth[41].clone() + azimuth[20].clone()
                 azimuth[:42] = azimuth[:42] - azimuth[41].clone()
             else:
