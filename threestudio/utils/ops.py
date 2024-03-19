@@ -17,7 +17,47 @@ def dot(x, y):
 
 
 def reflect(x, n):
-    return 2 * dot(x, n) * n - x
+    return x - 2 * dot(x, n) * n
+
+
+EPS_DTYPE = {torch.float16: 1e-4, torch.float32: 1e-7, torch.float64: 1e-8}
+
+
+def safe_sqrt(x, eps=None):
+    if eps is None:
+        eps = EPS_DTYPE[x.dtype]
+    return x.clip(min=eps).sqrt()
+
+
+def safe_exp(x, max=15):
+    return torch.exp(torch.clamp(x, max=max))
+
+
+def smoothstep(x, edge0=0.0, edge1=1.0):
+    x = torch.clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0)
+    return x * x * (3 - 2 * x)
+
+
+class _SafeLog(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x):
+        ctx.save_for_backward(x)
+        return x.log()
+
+    @staticmethod
+    def backward(ctx, grad):
+        (x,) = ctx.saved_tensors
+        return grad / x.clamp(min=torch.finfo(x.dtype).eps)
+
+
+def safe_log(x):
+    return _SafeLog.apply(x)
+
+
+def normalize(x, dim=-1, eps=None):
+    if eps is None:
+        eps = EPS_DTYPE[x.dtype]
+    return F.normalize(x, dim=dim, p=2, eps=eps)
 
 
 ValidScale = Union[Tuple[float, float], Num[Tensor, "2 D"]]

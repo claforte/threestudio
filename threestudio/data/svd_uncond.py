@@ -112,13 +112,16 @@ class SVDCameraIterableDataset(IterableDataset, Updateable):
 
         self.n_views = self.cfg.n_train_views
 
-        orbit_file = sorted(
-            glob.glob(os.path.join(self.cfg.cond_img_path, "frame_*.json"))
-        )[-1]
-        transforms = json.load(open(orbit_file, "r"))
-        self.cond_elevation_deg = 90 - transforms["polar"] * 180 / math.pi
-        self.cond_azimuth_deg = transforms["azimuth"] * 180 / math.pi
-        self.cond_camera_distance = transforms["camera_dist"]
+        # orbit_file = sorted(
+        #     glob.glob(os.path.join(self.cfg.cond_img_path, "frame_*.json"))
+        # )[20]
+        # transforms = json.load(open(orbit_file, "r"))
+        # self.cond_elevation_deg = 90 - transforms["polar"] * 180 / math.pi
+        # self.cond_azimuth_deg = transforms["azimuth"] * 180 / math.pi
+        # self.cond_camera_distance = transforms["camera_dist"]
+
+        self.cond_elevation_deg = self.cfg.cond_elevation_deg
+        self.cond_camera_distance = 2.0
 
         azimuth_deg: Float[Tensor, "B"] = torch.linspace(0, 360.0, self.n_views + 1)[1:]
         elevation_deg: Float[Tensor, "B"] = torch.full_like(
@@ -277,6 +280,7 @@ class SVDCameraIterableDataset(IterableDataset, Updateable):
 
             elevation_deg = elevation * 180 / math.pi
             azimuth_deg = azimuth * 180 / math.pi
+            # print(self.cond_elevation_deg, elevation_deg)
 
             # convert spherical coordinates to cartesian coordinates
             # right hand coordinate system, x back, y right, z up

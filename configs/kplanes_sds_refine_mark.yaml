@@ -13,13 +13,13 @@ data:
   camera_layout: "input"
   use_gt_orbit: True
   sober_or_drunk: "drunk"
-  sober_orbit_path: "/weka/proj-sv3d/DATASETS/GSO_sober21/${tag}/"
-  drunk_orbit_path: "/weka/proj-sv3d/DATASETS/GSO_drunk21/${tag}/"
+  sober_orbit_path: "/weka/proj-sv3d/DATASETS/GSO_sober21/CHICKEN_RACER/" # "/weka/proj-sv3d/DATASETS/OmniObject3D_sober21/${tag}/" # "/weka/proj-sv3d/DATASETS/GSO_sober21/${tag}/"
+  drunk_orbit_path: "/weka/proj-sv3d/DATASETS/GSO_drunk21/CHICKEN_RACER/" # "/weka/proj-sv3d/DATASETS/OmniObject3D_drunk21/${tag}/" # "/weka/proj-sv3d/DATASETS/GSO_drunk21/${tag}/"
   dataroot: "/weka/home-chunhanyao/GSO_${data.sober_or_drunk}21/${tag}/"
   use_random_camera: True
   random_camera: # threestudio/data/svd_uncond.py -> SVDDataModuleConfig
-    height: [576, 576, 576] # [288, 288, 288]
-    width: [576, 576, 576] # [288, 288, 288]
+    height: [512, 512, 512] # [288, 288, 288]
+    width: [512, 512, 512] # [288, 288, 288]
     batch_size: [21, 21, 21] # [16, 16, 16] # same as video model # of frames
     resolution_milestones: [600, 900]
     eval_height: 576
@@ -38,7 +38,7 @@ data:
     eval_elevation_deg: 5.0
     eval_camera_distance: 2.0
     eval_fovy_deg: 33.9
-    cond_img_path: ${data.drunk_orbit_path}
+    cond_img_path: ${data.dataroot} # ${data.sober_orbit_path}
     cond_elevation_deg: 5.0
     cond_azimuth_deg: 0.0
     cond_camera_distance: 2.0
@@ -62,7 +62,6 @@ system:
     radius: 0.62
     isosurface_resolution: 128
     isosurface_deformable_grid: true
-    # isosurface_outlier_n_faces_threshold: 0.01
     n_feature_dims: 3 # 16
 
     pos_encoding_config:
@@ -89,9 +88,17 @@ system:
   #   ambient_only_steps: 0
   #   textureless_prob: 0.05
   #   albedo_activation: sigmoid
-  material_type: "diffuse-with-point-light-material"
+  # material_type: "diffuse-with-point-light-material"
+  # material:
+  #   ambient_only_steps: 100000
+  material_type: "sgs-pbr-material"
   material:
-    ambient_only_steps: 100000
+    diffuse_only: True
+    num_sgs: 24
+    sgs_init_bw_color: 1.0
+    tone_mapping_type: "log-tonemapping"
+    tone_mapping:
+      color_space_type: "sRGB-color-space-conversion"
 
   background_type: "solid-color-background"
   background:
@@ -114,22 +121,22 @@ system:
     pretrained_model_name_or_path: "prediction_3D_OBJ_SVD21V_${data.sober_or_drunk}"
     cond_aug: 0.00
     num_steps: 50
-    height: 576
+    height: 512
     vram_O: true
-    cond_image_path: ${data.random_camera.cond_img_path}
+    cond_image_path: ${data.dataroot} # ${data.random_camera.cond_img_path}
     cond_elevation_deg: ${data.random_camera.cond_elevation_deg}
     cond_azimuth_deg: ${data.random_camera.cond_azimuth_deg}
     cond_camera_distance: ${data.random_camera.cond_camera_distance}
-    guidance_scale: 4.0
-    min_step_percent: [900, 0.3, 0.2, 1000] # [50, 0.7, 0.3, 200]  # (start_iter, start_val, end_val, end_iter)
-    max_step_percent: [900, 0.7, 0.3, 1000] # [50, 0.98, 0.8, 200]
+    guidance_scale: 3.0 # 2.5 # 4.0
+    min_step_percent: [800, 0.7, 0.3, 1000] # [50, 0.7, 0.3, 200]  # (start_iter, start_val, end_val, end_iter)
+    max_step_percent: [800, 0.9, 0.8, 1000] # [50, 0.98, 0.8, 200]
     noises_per_item: 1
-    guidance_eval_freq: 300
+    guidance_eval_freq: 300 # 50
 
   # rays_divisor_power: 2
   ambient_ratio_min: [0, 0.1, 0.5, 400, 0.9, 401]
   obj_name: ${tag}
-  sober_or_drunk: ${data.sober_or_drunk}
+  dataroot: ${data.dataroot}
   disable_grid_prune_step: 1000
 
   loggers:
@@ -139,22 +146,24 @@ system:
       name: dummy
 
   loss:
-    lambda_sds: [900, 0.0, 0.1, 950] # 0.0
+    lambda_sds: [800, 0.0, 0.1, 1000] # 0.0
     lambda_rgb: 1000.
     lambda_mask: 750. # 100.
     lambda_depth: 0.
     lambda_depth_rel: 0.
     lambda_normal: [0, 100., 50., 500]
     lambda_normal_smooth: [0, 0., 100., 200, 10., 300]
+    lambda_albedo_range: 300.
     lambda_3d_normal_smooth: 0.
-    lambda_normal_consistency: 100. # 300. # 75.
+    lambda_normal_consistency: 100.
     lambda_laplacian_smoothness: 0.
-    lambda_3d_smoothness_albedo: [100, 0., 100., 200]
+    lambda_3d_smoothness_albedo: [100, 0., 200., 200]
     loss_3d_smoothness_delta: 0.01
-    lambda_bilateral_smoothness_comp_normal: 100. # 250.
+    lambda_bilateral_smoothness_comp_normal: 250.
     lambda_l1_regularization: 0
     lambda_total_variation: 0
-    lambda_lpips: 300.
+    lambda_lpips: 500.
+    lambda_light_demodulation: 7.0
 
   optimizer:
     name: Adam
@@ -167,7 +176,7 @@ trainer:
   max_steps: 1000
   log_every_n_steps: 1
   num_sanity_val_steps: 0
-  val_check_interval: 1200
+  val_check_interval: 1200 # 100
   enable_progress_bar: true
   precision: 32
 

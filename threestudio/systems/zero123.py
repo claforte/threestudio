@@ -18,7 +18,7 @@ import threestudio
 from threestudio.systems.base import BaseLift3DSystem
 from threestudio.utils.img_gradient import compute_image_gradients
 from threestudio.utils.misc import C, get_CPU_mem, get_GPU_mem
-from threestudio.utils.ops import binary_cross_entropy, dot
+from threestudio.utils.ops import binary_cross_entropy, dot, normalize
 from threestudio.utils.typing import *
 
 
@@ -32,7 +32,7 @@ class Zero123(BaseLift3DSystem):
         rays_divisor_power: int = 0
         ref_batch_size: int = 1
         obj_name: str = None
-        sober_or_drunk: str = None
+        dataroot: str = None
         disable_grid_prune_step: int = 2000
 
     cfg: Config
@@ -215,13 +215,40 @@ class Zero123(BaseLift3DSystem):
                                     val_loss.mean(),
                                 )
 
+            if "comp_illumination" in out:
+                if self.C(self.cfg.loss.lambda_light_demodulation) > 0:
+                    luminance_illumination = out["comp_illumination"].mean(
+                        dim=-1, keepdim=True
+                    )
+                    value_rgb = gt_rgb.max(dim=-1, keepdim=True).values
+                    light_demodulation = (
+                        (luminance_illumination - value_rgb)
+                        .abs()[gt_mask.squeeze(-1)]
+                        .mean()
+                    )
+                    set_loss("light_demodulation", light_demodulation)
+
             self.log("train/mem_cpu", get_CPU_mem(), prog_bar=True)
             self.log("train/mem_gpu", get_GPU_mem()[0], prog_bar=True)
 
         elif guidance == "zero123":
             # zero123
+
+            # cam_pos: Float[Tensor, "B 3"] = batch["ref_cam_pos"]
+            # mesh_positions: Float[Tensor, "V 3"] = out["mesh"].v_pos
+            # view_directions: Float[Tensor, "B V 3"] = normalize(
+            #     cam_pos.unsqueeze(1) - mesh_positions.unsqueeze(0)
+            # )
+
+            # mesh_normals: Float[Tensor, "V 3"] = normalize(out["mesh"].v_nrm)
+            # n_dot_c: Float[Tensor, "B V"] = (
+            #     mesh_normals.unsqueeze(0) * view_directions
+            # ).sum(-1)
+            # non_visible: Float[Tensor, "V"] = (n_dot_c < 0.1).all(dim=0)
+
             guidance_out = self.guidance(
                 out["comp_rgb"],
+                out["comp_vis"],
                 # **batch,
                 batch["elevation"],
                 batch["azimuth"],
@@ -259,6 +286,36 @@ class Zero123(BaseLift3DSystem):
             normals = out["normal"]
             normals_perturb = out["normal_perturb"]
             set_loss("3d_normal_smooth", (normals - normals_perturb).abs().mean())
+
+        pred_mask = out["opacity"] > 0.5
+        if "comp_albedo" in out:
+            if self.C(self.cfg.loss.lambda_albedo_range) > 0:
+                # Albedo should be larger than 0.15 and small 0.95
+                loss = (
+                    (0.15 - out["comp_albedo"]).clip(0).square()
+                    + (out["comp_albedo"] - 0.95).clip(0).square()
+                )[pred_mask.detach().squeeze(-1)].mean()
+                set_loss("albedo_range", loss)
+
+        if "comp_roughness" in out:
+            if self.C(self.cfg.loss.lambda_lambertian) > 0:
+                lambertian_loss = (
+                    (1 - out["comp_roughness"])
+                    .square()[pred_mask.detach().squeeze(-1)]
+                    .mean()
+                )
+                if "comp_metallic" in out:
+                    lambertian_loss = (
+                        lambertian_loss
+                        + (out["comp_metallic"])
+                        .square()[pred_mask.detach().squeeze(-1)]
+                        .mean()
+                    )
+                set_loss("lambertian", lambertian_loss)
+
+        if "comp_residual" in out:
+            if self.C(self.cfg.loss.lambda_residual) > 0:
+                set_loss("residual", out["comp_residual"].square().mean())
 
         if self.cfg.geometry.pos_encoding_config.otype == "KPlanes":
             if self.C(self.cfg.loss.lambda_total_variation) > 0:
@@ -364,6 +421,10 @@ class Zero123(BaseLift3DSystem):
         Args:
             guidance: one of "ref" (reference image supervision), "zero123"
         """
+        ref_cam_pos = batch["camera_positions"]
+        if self.ref_cam_pos is None or self.ref_cam_pos.shape[0] < ref_cam_pos.shape[0]:
+            self.ref_cam_pos = ref_cam_pos
+
         if guidance == "ref":
             # bg_color = torch.rand_like(batch['rays_o'])
             ambient_ratio = 1.0
@@ -374,6 +435,8 @@ class Zero123(BaseLift3DSystem):
             offset_y_tensor = torch.randint(0, rays_divisor, (self.cfg.ref_batch_size,))
         elif guidance == "zero123":
             batch = batch["random_camera"]
+            batch["ref_cam_pos"] = self.ref_cam_pos
+            batch["render_vis"] = True
             # ambient_ratio = (
             #     self.C(self.cfg.ambient_ratio_min)
             #     + (1 - self.C(self.cfg.ambient_ratio_min)) * random.random()
@@ -393,6 +456,8 @@ class Zero123(BaseLift3DSystem):
         batch["bg_color"] = None
         batch["ambient_ratio"] = ambient_ratio
 
+        # import pdb; pdb.set_trace()
+
         if guidance == "ref":
             out = self(batch)
 
@@ -402,12 +467,12 @@ class Zero123(BaseLift3DSystem):
             #     if torch.is_tensor(v):
             #         batch[k] = v.to(self.guidance.device)
 
-            B, H, W = batch["rays_o"].shape[:3]
-            elevation_all = batch["elevation"].clone()
-            azimuth_all = batch["azimuth"].clone()
-            for k, v in batch.items():
-                if k != "frame_idx" and torch.is_tensor(v) and v.shape[0] == B:
-                    batch[k] = batch[k][batch["frame_idx"]]
+            # B, H, W = batch["rays_o"].shape[:3]
+            # elevation_all = batch["elevation"].clone()
+            # azimuth_all = batch["azimuth"].clone()
+            # for k, v in batch.items():
+            #     if k != "frame_idx" and torch.is_tensor(v) and v.shape[0] == B:
+            #         batch[k] = batch[k][batch["frame_idx"]]
 
             out = self(batch)
 
@@ -431,6 +496,9 @@ class Zero123(BaseLift3DSystem):
 
     def training_step(self, batch, batch_idx):
         total_loss = 0.0
+
+        if batch_idx == 0:
+            self.ref_cam_pos = None
 
         if batch_idx > self.cfg.disable_grid_prune_step:
             self.renderer.cfg.grid_prune = False
@@ -655,24 +723,32 @@ class Zero123(BaseLift3DSystem):
         nerf_drunk_pattern = os.path.join(self.get_save_dir(), "drunk", "*.png")
         nerf_random_pattern = os.path.join(self.get_save_dir(), "random", "*.png")
         gt_sober_pattern = os.path.join(
-            "/weka/proj-sv3d/DATASETS/GSO_sober21", self.cfg.obj_name, "rgba", "*.png"
+            "/weka/proj-sv3d/DATASETS/OmniObject3D_sober21",
+            self.cfg.obj_name,
+            "rgba",
+            "*.png",
         )
         gt_drunk_pattern = os.path.join(
-            "/weka/proj-sv3d/DATASETS/GSO_drunk21", self.cfg.obj_name, "rgba", "*.png"
+            "/weka/proj-sv3d/DATASETS/OmniObject3D_drunk21",
+            self.cfg.obj_name,
+            "rgba",
+            "*.png",
         )
-        if self.cfg.sober_or_drunk == "drunk":
-            svd_pattern = os.path.join(
-                "/weka/home-chunhanyao/GSO_drunk21", self.cfg.obj_name, "*.png"
-            )
-            svd_label = "SVD_drunk"
-        else:
-            svd_pattern = os.path.join(
-                "/weka/home-chunhanyao/GSO_sober21", self.cfg.obj_name, "*.png"
-            )
-            svd_label = "SVD_sober"
+        svd_pattern = os.path.join(self.cfg.dataroot, "*.png")
+        svd_label = "SV3D NVS"
+        if (
+            len(glob.glob(gt_sober_pattern)) == 0
+            or len(glob.glob(gt_drunk_pattern)) == 0
+        ):
+            gt_sober_pattern = svd_pattern
+            gt_drunk_pattern = svd_pattern
 
-        imgs_gt_sober = [cv2.imread(f, -1) for f in sorted(glob.glob(gt_sober_pattern))]
-        imgs_gt_drunk = [cv2.imread(f, -1) for f in sorted(glob.glob(gt_drunk_pattern))]
+        imgs_gt_sober = [
+            cv2.imread(f, -1) for f in sorted(glob.glob(gt_sober_pattern))[:21]
+        ]
+        imgs_gt_drunk = [
+            cv2.imread(f, -1) for f in sorted(glob.glob(gt_drunk_pattern))[:21]
+        ]
         imgs_nerf_sober = [cv2.imread(f) for f in sorted(glob.glob(nerf_sober_pattern))]
         imgs_nerf_drunk = [cv2.imread(f) for f in sorted(glob.glob(nerf_drunk_pattern))]
         imgs_nerf_random = [
@@ -682,24 +758,30 @@ class Zero123(BaseLift3DSystem):
 
         img_grids = []
         for im1, im2, im3, im4, im5, im6 in zip(
+            imgs_gt_sober,
             imgs_gt_drunk,
             imgs_svd,
-            imgs_nerf_drunk,
-            imgs_gt_sober,
             imgs_nerf_sober,
+            imgs_nerf_drunk,
             imgs_nerf_random,
         ):
-            im1[im1[..., 3] == 0, :3] = 255
-            im4[im4[..., 3] == 0, :3] = 255
+            if im1.shape[-1] == 4:
+                im1[im1[..., 3] == 0, :3] = 255
+                im2[im2[..., 3] == 0, :3] = 255
+                im1 = im1[..., :3]
+                im2 = im2[..., :3]
+            im1 = cv2.resize(im1, dsize=im4.shape[:2])
+            im2 = cv2.resize(im2, dsize=im4.shape[:2])
+            im3 = cv2.resize(im3, dsize=im4.shape[:2])
             img_grid = np.vstack(
                 (
-                    np.hstack((im1[..., :3], im2, im3)),
-                    np.hstack((im4[..., :3], im5, im6)),
+                    np.hstack((im1, im2, im3)),
+                    np.hstack((im4, im5, im6)),
                 )
             )
             img_grid = cv2.putText(
                 img=np.copy(img_grid),
-                text="GT_drunk",
+                text="GT_sober",
                 org=(30, 50),
                 fontFace=2,
                 fontScale=1,
@@ -708,7 +790,7 @@ class Zero123(BaseLift3DSystem):
             )
             img_grid = cv2.putText(
                 img=np.copy(img_grid),
-                text=svd_label,
+                text="GT_drunk",
                 org=(606, 50),
                 fontFace=2,
                 fontScale=1,
@@ -717,7 +799,7 @@ class Zero123(BaseLift3DSystem):
             )
             img_grid = cv2.putText(
                 img=np.copy(img_grid),
-                text="NeRF (drunk renders)",
+                text=svd_label,
                 org=(1182, 50),
                 fontFace=2,
                 fontScale=1,
@@ -726,7 +808,7 @@ class Zero123(BaseLift3DSystem):
             )
             img_grid = cv2.putText(
                 img=np.copy(img_grid),
-                text="GT_sober",
+                text="3D (sober renders)",
                 org=(30, 606),
                 fontFace=2,
                 fontScale=1,
@@ -735,7 +817,7 @@ class Zero123(BaseLift3DSystem):
             )
             img_grid = cv2.putText(
                 img=np.copy(img_grid),
-                text="NeRF (sober renders)",
+                text="3D (drunk renders)",
                 org=(606, 606),
                 fontFace=2,
                 fontScale=1,
@@ -744,7 +826,7 @@ class Zero123(BaseLift3DSystem):
             )
             img_grid = cv2.putText(
                 img=np.copy(img_grid),
-                text="NeRF (random renders)",
+                text="3D (random renders)",
                 org=(1182, 606),
                 fontFace=2,
                 fontScale=1,

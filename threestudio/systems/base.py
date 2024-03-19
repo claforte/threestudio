@@ -221,6 +221,8 @@ class BaseLift3DSystem(BaseSystem):
 
         material_type: str = ""
         material: dict = field(default_factory=dict)
+        material_restore_from: Optional[str] = None
+        material_convert_override: dict = field(default_factory=dict)
 
         background_type: str = ""
         background: dict = field(default_factory=dict)
@@ -283,7 +285,34 @@ class BaseLift3DSystem(BaseSystem):
         else:
             self.geometry = threestudio.find(self.cfg.geometry_type)(self.cfg.geometry)
 
-        self.material = threestudio.find(self.cfg.material_type)(self.cfg.material)
+        if self.cfg.material_restore_from and not self.resumed:
+            threestudio.info("Initializing material from a given checkpoint ...")
+            from threestudio.utils.config import load_config, parse_structured
+
+            prev_cfg = load_config(
+                os.path.join(
+                    os.path.dirname(self.cfg.material_restore_from),
+                    "../configs/parsed.yaml",
+                )
+            )  # TODO: hard-coded relative path
+            prev_system_cfg: BaseLift3DSystem.Config = parse_structured(
+                self.Config, prev_cfg.system
+            )
+            prev_material_cfg = prev_system_cfg.material
+            prev_material_cfg.update(self.cfg.material_convert_override)
+
+            state_dict, epoch, global_step = load_module_weights(
+                self.cfg.material_restore_from,
+                module_name="material",
+                map_location="cpu",
+            )
+            self.material = threestudio.find(self.cfg.material_type)(prev_material_cfg)
+            self.material.load_state_dict(state_dict, strict=False)
+            # restore step-dependent states
+            self.material.do_update_step(epoch, global_step, on_load_weights=True)
+        else:
+            self.material = threestudio.find(self.cfg.material_type)(self.cfg.material)
+
         self.background = threestudio.find(self.cfg.background_type)(
             self.cfg.background
         )

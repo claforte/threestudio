@@ -6,4 +6,5 @@ from . import (
     no_material,
     pbr_material,
     sd_latent_adapter_material,
+    sgs_pbr_material,
 )

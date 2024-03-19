@@ -14,8 +14,8 @@ data:
   train_on_gt: False
   use_gt_orbit: True
   sober_or_drunk: "drunk"
-  sober_orbit_path: "/weka/proj-sv3d/DATASETS/GSO_sober21/${tag}/"
-  drunk_orbit_path: "/weka/proj-sv3d/DATASETS/GSO_drunk21/${tag}/"
+  sober_orbit_path: "/weka/proj-sv3d/DATASETS/GSO_sober21/CHICKEN_RACER/" # "/weka/proj-sv3d/DATASETS/GSO_sober21/${tag}/"
+  drunk_orbit_path: "/weka/proj-sv3d/DATASETS/GSO_drunk21/CHICKEN_RACER/" # "/weka/proj-sv3d/DATASETS/GSO_drunk21/${tag}/"
   dataroot: "/weka/home-chunhanyao/GSO_${data.sober_or_drunk}21/${tag}/"
   use_random_camera: False
 
@@ -32,7 +32,6 @@ system:
     radius: 0.62
     isosurface_resolution: 128
     isosurface_deformable_grid: true
-    # isosurface_outlier_n_faces_threshold: 0.01
     n_feature_dims: 3 # 16
 
     pos_encoding_config:
@@ -59,9 +58,17 @@ system:
   #   ambient_only_steps: 0
   #   textureless_prob: 0.05
   #   albedo_activation: sigmoid
-  material_type: "diffuse-with-point-light-material"
+  # material_type: "diffuse-with-point-light-material"
+  # material:
+  #   ambient_only_steps: 100000
+  material_type: "sgs-pbr-material"
   material:
-    ambient_only_steps: 100000
+    diffuse_only: True
+    num_sgs: 24
+    sgs_init_bw_color: 1.0
+    tone_mapping_type: "log-tonemapping"
+    tone_mapping:
+      color_space_type: "sRGB-color-space-conversion"
 
   background_type: "solid-color-background"
   background:
@@ -81,7 +88,7 @@ system:
   # rays_divisor_power: 2
   ambient_ratio_min: [0, 0.1, 0.5, 400, 0.9, 401]
   obj_name: ${tag}
-  sober_or_drunk: ${data.sober_or_drunk}
+  dataroot: ${data.dataroot}
   disable_grid_prune_step: 1000
 
   loggers:
@@ -98,14 +105,17 @@ system:
     lambda_depth_rel: 0.
     lambda_normal: [0, 100., 50., 500]
     lambda_normal_smooth: [0, 0., 100., 200, 10., 300]
+    lambda_albedo_range: 300.
     lambda_3d_normal_smooth: 0.
-    lambda_normal_consistency: 300. # 75.
+    lambda_normal_consistency: 100.
     lambda_laplacian_smoothness: 0.
-    lambda_3d_smoothness_albedo: [100, 0., 100., 200]
+    lambda_3d_smoothness_albedo: [100, 0., 200., 200]
     loss_3d_smoothness_delta: 0.01
+    lambda_bilateral_smoothness_comp_normal: 250.
     lambda_l1_regularization: 0
     lambda_total_variation: 0
-    lambda_lpips: 300.
+    lambda_lpips: 500.
+    lambda_light_demodulation: 7.0
 
   optimizer:
     name: Adam

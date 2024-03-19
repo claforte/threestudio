@@ -89,7 +89,7 @@ class StableVideoDiffusionGuidance(BaseObject):
 
         guidance_eval_freq: int = 0
         guidance_eval_dir: str = os.path.realpath(
-            os.path.join(os.path.dirname(__file__), "../../../")
+            os.path.join(os.path.dirname(__file__), "../../../outputs/")
         )
 
     cfg: Config
@@ -114,10 +114,10 @@ class StableVideoDiffusionGuidance(BaseObject):
 
         self.grad_clip_val: Optional[float] = None
 
-        # self.prepare_embeddings(os.path.join(self.cfg.cond_image_path, '000020.png'))
-        self.prepare_embeddings(
-            os.path.join(self.cfg.cond_image_path, "rgba", "rgba_0020.png")
-        )
+        self.prepare_embeddings(os.path.join(self.cfg.cond_image_path, "000020.png"))
+        # self.prepare_embeddings(
+        #     os.path.join(self.cfg.cond_image_path, "rgba", "rgba_0020.png")
+        # )
 
         self.T = self.model.T
         self.num_steps = self.model.num_steps
@@ -150,6 +150,7 @@ class StableVideoDiffusionGuidance(BaseObject):
     def __call__(
         self,
         rgb: Float[Tensor, "B H W C"],
+        vis: Float[Tensor, "B H W C"],
         elevation: Float[Tensor, "B"],
         azimuth: Float[Tensor, "B"],
         frame_idx: Float[Tensor, "N"],
@@ -157,6 +158,7 @@ class StableVideoDiffusionGuidance(BaseObject):
     ):
         device_input = rgb.device
         rgb = rgb.to(self.device)
+        vis_BCHW = vis.permute(0, 3, 1, 2)
         rgb_BCHW = rgb.permute(0, 3, 1, 2)
         latents = self.encode_images(rgb_BCHW)
 
@@ -213,6 +215,13 @@ class StableVideoDiffusionGuidance(BaseObject):
                 ),
                 rgb_eval,  # continue denoised
             )
+            imageio.mimsave(
+                os.path.join(
+                    self.cfg.guidance_eval_dir,
+                    f"guidance_eval_vis_{self.count:05d}.mp4",
+                ),
+                ((rgb * vis).detach().cpu().numpy() * 255).astype(np.uint8),
+            )
         self.count += 1
 
         # TODO CFG
@@ -224,8 +233,6 @@ class StableVideoDiffusionGuidance(BaseObject):
         #     noise_pred_cond - noise_pred_uncond
         # )
 
-        rgb_pred = resize_like(rgb_pred, rgb_BCHW)
-
         # w = (1 - self.alphas[t]).reshape(-1, 1, 1, 1)
         grad = (rgb_pred - rgb_BCHW)[frame_idx.to(rgb_pred.device)]
         grad = grad.to(device_input)
@@ -233,6 +240,8 @@ class StableVideoDiffusionGuidance(BaseObject):
         # clip grad for stable training?
         if self.grad_clip_val is not None:
             grad = grad.clamp(-self.grad_clip_val, self.grad_clip_val)
+
+        grad *= (1 - vis_BCHW).clip(0.2, 1.0)
 
         # # loss = SpecifyGradient.apply(latents, grad)
         # # SpecifyGradient is not straghtforward, use a reparameterization trick instead

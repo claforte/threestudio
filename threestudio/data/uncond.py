@@ -31,8 +31,8 @@ def generate_drunk_cycle_xy_values(
     length=21,
     init_elev=0,
     num_components=84,
-    frequency_range=(1, 5),
-    amplitude_range=(0.5, 10),
+    frequency_range=(1, 3),  # (1, 5),
+    amplitude_range=(0.5, 10),  # (0.5, 10),
     step_range=(0, 2),
 ):
     # Y values generation
@@ -93,25 +93,12 @@ def gen_drunk_loop(length=21, elev_deg=0):
         length=length * 2, init_elev=elev_deg
     )
     smoothed_elev_values = smooth_data(elev_values, 5)
-    smoothed_elev_values = np.clip(smoothed_elev_values, -30, 45)
+    smoothed_elev_values = np.clip(smoothed_elev_values, -45, 45)
     subsample = 2  # 84 // length
     azim_rad = np.deg2rad(azim_values[::subsample])
     elev_rad = np.deg2rad(smoothed_elev_values[::subsample])
     # Make cond frame the last one
     return np.roll(azim_rad, -1), np.roll(elev_rad, -1)
-
-
-# def gen_elev_loop(length=21, elev_deg=0):
-#     azim = np.zeros(length)
-#     elev = np.linspace(elev_deg, elev_deg+360, length+1)[1:]
-#     elev[elev > 180] = elev[elev > 180] - 360
-#     azim[elev > 90] = np.pi
-#     azim[elev <= -90] = np.pi
-#     elev[elev > 90] = 180 - elev[elev > 90]
-#     elev[elev <= -90] = - 180 - elev[elev <= -90]
-#     azim_rad = np.deg2rad(azim)
-#     elev_rad = np.deg2rad(elev)
-#     return azim_rad, elev_rad
 
 
 def gen_elev_loop(length=21, elev=0):

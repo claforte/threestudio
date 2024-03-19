@@ -125,9 +125,19 @@ class MultiviewIterableDataset(IterableDataset, Updateable):
         scale = self.cfg.train_downsample_resolution
         self.n_views = int(C(self.cfg.n_views, 0, 0))
 
-        camera_dict = json.load(
-            open(os.path.join(self.cfg.dataroot, "transforms.json"), "r")
-        )
+        if os.path.exists(os.path.join(self.cfg.dataroot, "transforms.json")):
+            camera_dict = json.load(
+                open(os.path.join(self.cfg.dataroot, "transforms.json"), "r")
+            )
+            self.is_gt_transforms = True
+        else:
+            data_root = "/weka/home-chunhanyao/sv3d_eval/MODEL_sv3d-uncond-to-cond_IMG_static_ORBIT_static/2_of_Jenga_Classic_Game/rgba_0020/"
+            # data_root = "/weka/home-chunhanyao/sv3d_eval/MODEL_sv3d-uncond-to-cond_IMG_static_ORBIT_static/3D_Dollhouse_Happy_Brother/rgba_0020/"
+            # data_root = "/weka/home-chunhanyao/sv3d_eval/MODEL_sv3d-uncond-to-cond_IMG_static_ORBIT_static/REEF_BANTU/rgba_0020/"
+            camera_dict = json.load(
+                open(os.path.join(data_root, "transforms.json"), "r")
+            )
+            self.is_gt_transforms = False
         assert camera_dict["camera_model"] == "OPENCV"
 
         frames = camera_dict["frames"]
@@ -197,7 +207,10 @@ class MultiviewIterableDataset(IterableDataset, Updateable):
                 )
                 rgba[rgba[..., 3] == 0, :3] = 255
             else:
-                frame_path = os.path.join(self.cfg.dataroot, frame["file_path"])
+                if self.is_gt_transforms:
+                    frame_path = os.path.join(self.cfg.dataroot, frame["file_path"])
+                else:
+                    frame_path = os.path.join(self.cfg.dataroot, f"{idx:06d}.png")
                 rgba = cv2.cvtColor(
                     cv2.imread(frame_path, cv2.IMREAD_UNCHANGED),
                     cv2.COLOR_BGRA2RGBA,
@@ -207,7 +220,7 @@ class MultiviewIterableDataset(IterableDataset, Updateable):
             )
             img = rgba[:, :, :3].copy()
             mask = torch.tensor(
-                np.any(img[:, :, :3] <= [0.99, 0.99, 0.99], axis=-1)
+                np.any(img[:, :, :3] <= [0.97, 0.97, 0.97], axis=-1)
             ).unsqueeze(-1)
             img = cv2.resize(img, (self.frame_w, self.frame_h))
             img: Float[Tensor, "H W 3"] = torch.FloatTensor(img).to(self.rank)
@@ -216,10 +229,16 @@ class MultiviewIterableDataset(IterableDataset, Updateable):
             frames_img.append(img)
 
             if self.cfg.use_omnidata_normals:
-                normal_path = os.path.join(
-                    self.cfg.omnidata_normal_path,
-                    os.path.splitext(frame["file_path"])[0] + "_normal.hdr",
-                )
+                if self.is_gt_transforms:
+                    normal_path = os.path.join(
+                        self.cfg.omnidata_normal_path,
+                        os.path.splitext(frame["file_path"])[0] + "_normal.hdr",
+                    )
+                else:
+                    normal_path = os.path.join(
+                        self.cfg.omnidata_normal_path,
+                        os.path.splitext(f"{idx:06d}.png")[0] + "_normal.hdr",
+                    )
                 normal = cv2.cvtColor(
                     cv2.imread(normal_path, cv2.IMREAD_UNCHANGED)[..., :3],
                     cv2.COLOR_BGR2RGB,
@@ -288,6 +307,10 @@ class MultiviewIterableDataset(IterableDataset, Updateable):
             random_camera_cfg = parse_structured(
                 SVDCameraDataModuleConfig, self.cfg.get("random_camera", {})
             )
+            obj_name = self.cfg.dataroot.split("/")[-3]
+            elev_dict = os.path.join(self.cfg.dataroot, "..", "..", "elev_dict.json")
+            elev_deg = json.load(open(elev_dict, "r"))[obj_name]
+            random_camera_cfg.cond_elevation_deg = int(elev_deg)
             self.random_pose_generator = SVDCameraIterableDataset(random_camera_cfg)
 
     def update_step(self, epoch: int, global_step: int, on_load_weights: bool = False):

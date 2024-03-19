@@ -16,6 +16,55 @@ python eval_mesh.py --pr_dir=/weka/home-chunhanyao/dreamgaussian/logs/GSO_drunk2
 --output_file=/weka/home-chunhanyao/dreamgaussian_drunk_eval_3d.txt
 
 
+python ../stable-research/scripts/threeD_diffusion/metrics_img2vid.py --name="drunk" \
+--main_gt_dir=/weka/proj-sv3d/DATASETS/GSO_drunk21/*/rgba \
+--main_pr_dir=/weka/home-markboss/object_reconstructions/stable_zero123_sober_gso50/*/drunk \
+--out_dir=/weka/home-chunhanyao/threestudio/outputs/
+
+
+for dir in /weka/home-chunhanyao/sv3d_eval/Otoy_dynamic/*/; \
+do (
+    OBJ=$(basename -- $dir) && \
+    python scripts/get_mono_normals.py \
+    --input_dir=/weka/home-chunhanyao/sv3d_eval/Otoy_dynamic/$OBJ/rgb/ \
+    --output_dir=/weka/home-chunhanyao/sv3d_eval/Otoy_dynamic/$OBJ/mono_normal/
+); done
+
+for dir in /weka/proj-sv3d/EVAL_OmniObject3D/OmniObject3D_drunk21/SV3D_uncond_to_cond/*/; \
+do (
+    OBJ=$(basename -- $dir) && \
+    python scripts/get_mono_normals.py \
+    --input_dir=/weka/proj-sv3d/EVAL_OmniObject3D/OmniObject3D_drunk21/SV3D_uncond_to_cond/$OBJ/ \
+    --output_dir=/weka/home-chunhanyao/sv3d_eval/OmniObject3D_drunk21/$OBJ/
+); done
+
+
+for dir in ../sv3d_eval/EVAL_WildnFree_noBG_stable_static/*/; \
+do (
+    OBJ=$(basename -- $dir) && \
+    python scripts/get_mono_normals.py \
+    --input_dir=../sv3d_eval/EVAL_WildnFree_noBG_stable_static/$OBJ/rgb/ \
+    --output_dir=../sv3d_eval/EVAL_WildnFree_noBG_stable_static/$OBJ/mono_normal/
+); done
+
+for dir in ../GSO_sober21/*/; \
+do (
+    OBJ=$(basename -- $dir) && \
+    python scripts/get_mono_normals.py \
+    --input_dir=/weka/proj-sv3d/EVAL_GSO300/GSO_sober21/EscherNet/$OBJ/ \
+    --output_dir=/weka/home-chunhanyao/sv3d_eval/EscherNet/$OBJ/
+); done
+
+
+for dir in ../GSO_sober21/*/; \
+do (
+    OBJ=$(basename -- $dir) && \
+    python scripts/get_mono_normals.py \
+    --input_dir=/weka/home-chunhanyao/sv3d_eval/MODEL_sv3d-cond_IMG_static_ORBIT_elevation_40/$OBJ/rgba_0020 \
+    --output_dir=/weka/home-chunhanyao/sv3d_eval/MODEL_sv3d-cond_IMG_static_ORBIT_elevation_40/$OBJ/mono_normal
+); done
+
+
 exp_name0=GSO_hashgrid_drunk_no_sds
 exp_name=GSO_hashgrid_drunk_no_sds_refine
 config0=configs/kplanes_no_sds_mark.yaml

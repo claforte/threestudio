@@ -47,6 +47,9 @@ class NeRFVolumeRenderer(VolumeRenderer):
         # for importance
         num_samples_per_ray_importance: int = 64
 
+        # Deferred shading
+        shade_deferred: bool = False
+
     cfg: Config
 
     def configure(
@@ -56,6 +59,9 @@ class NeRFVolumeRenderer(VolumeRenderer):
         background: BaseBackground,
     ) -> None:
         super().configure(geometry, material, background)
+        if self.material.requires_normal:
+            self.cfg.return_comp_normal = True
+
         if self.cfg.estimator == "occgrid":
             self.estimator = nerfacc.OccGridEstimator(
                 roi_aabb=self.bbox.view(-1), resolution=16, levels=1
@@ -119,12 +125,13 @@ class NeRFVolumeRenderer(VolumeRenderer):
         self,
         rays_o: Float[Tensor, "B H W 3"],
         rays_d: Float[Tensor, "B H W 3"],
+        c2w: Float[Tensor, "B 4 4"],
         light_positions: Float[Tensor, "B 3"],
         bg_color: Optional[Tensor] = None,
         rays_divisor: int = 1,
         offset_x: Optional[Int[Tensor, "B"]] = None,
         offset_y: Optional[Int[Tensor, "B"]] = None,
-        **kwargs
+        **kwargs,
     ) -> Dict[str, Float[Tensor, "..."]]:
         if rays_divisor > 1:
             rays_o = torch.cat(
@@ -297,6 +304,7 @@ class NeRFVolumeRenderer(VolumeRenderer):
         positions = t_origins + t_dirs * t_positions
         t_intervals = t_ends - t_starts
 
+        material_out = {}
         if self.training:
             geo_out = self.geometry(
                 positions,
@@ -304,13 +312,16 @@ class NeRFVolumeRenderer(VolumeRenderer):
                     self.material.requires_normal or self.cfg.return_comp_normal
                 ),
             )
-            rgb_fg_all = self.material(
-                viewdirs=t_dirs,
-                positions=positions,
-                light_positions=t_light_positions,
-                **geo_out,
-                **kwargs
-            )
+
+            if not self.cfg.shade_deferred:
+                material_eval = self.material(
+                    viewdirs=t_dirs,
+                    positions=positions,
+                    light_positions=t_light_positions,
+                    **geo_out,
+                    **kwargs,
+                )
+
             comp_rgb_bg = self.background(dirs=rays_d)
         else:
             geo_out = chunk_batch(
@@ -321,14 +332,17 @@ class NeRFVolumeRenderer(VolumeRenderer):
                     self.material.requires_normal or self.cfg.return_comp_normal
                 ),
             )
-            rgb_fg_all = chunk_batch(
-                self.material,
-                self.cfg.eval_chunk_size,
-                viewdirs=t_dirs,
-                positions=positions,
-                light_positions=t_light_positions,
-                **geo_out
-            )
+            if not self.cfg.shade_deferred:
+                material_eval = chunk_batch(
+                    self.material,
+                    self.cfg.eval_chunk_size,
+                    viewdirs=t_dirs,
+                    positions=positions,
+                    light_positions=t_light_positions,
+                    **geo_out,
+                    **kwargs,
+                )
+
             comp_rgb_bg = chunk_batch(
                 self.background, self.cfg.eval_chunk_size, dirs=rays_d
             )
@@ -351,18 +365,94 @@ class NeRFVolumeRenderer(VolumeRenderer):
         depth: Float[Tensor, "Nr 1"] = nerfacc.accumulate_along_rays(
             weights[..., 0], values=t_positions, ray_indices=ray_indices, n_rays=n_rays
         )
-        comp_rgb_fg: Float[Tensor, "Nr Nc"] = nerfacc.accumulate_along_rays(
-            weights[..., 0], values=rgb_fg_all, ray_indices=ray_indices, n_rays=n_rays
-        )
+
+        if not self.cfg.shade_deferred:
+            if isinstance(material_eval, dict):
+                rgb_fg_all = material_eval["color"]
+                material_out.update(
+                    {k: v for k, v in material_eval.items() if k != "color"}
+                )
+            else:
+                rgb_fg_all = material_eval
+                material_out = {}
+
+            comp_material_out = {
+                f"comp_{k}": nerfacc.accumulate_along_rays(
+                    weights[..., 0], values=v, ray_indices=ray_indices, n_rays=n_rays
+                )
+                for k, v in material_out.items()
+            }
+            comp_rgb_fg: Float[Tensor, "Nr Nc"] = nerfacc.accumulate_along_rays(
+                weights[..., 0],
+                values=rgb_fg_all,
+                ray_indices=ray_indices,
+                n_rays=n_rays,
+            )
+
+        if self.cfg.shade_deferred:
+            comp_geo_out = {
+                k: nerfacc.accumulate_along_rays(
+                    weights[..., 0], values=v, ray_indices=ray_indices, n_rays=n_rays
+                )
+                for k, v in geo_out.items()
+            }
+            comp_geo_out = {
+                k: nerfacc.accumulate_along_rays(
+                    weights[..., 0], values=v, ray_indices=ray_indices, n_rays=n_rays
+                )
+                for k, v in geo_out.items()
+            }
+            if "shading_normal" in comp_geo_out:
+                comp_geo_out["shading_normal"] = F.normalize(
+                    comp_geo_out["shading_normal"], dim=-1
+                )
+            surface_pos = rays_o_flatten + rays_d_flatten * depth
+            comp_geo_out["positions"] = surface_pos
+
+            if self.training:
+                material_eval = self.material(
+                    viewdirs=rays_d_flatten,
+                    light_positions=light_positions_flatten,
+                    **comp_geo_out,
+                    **kwargs,
+                )
+            else:
+                material_eval = chunk_batch(
+                    self.material,
+                    self.cfg.eval_chunk_size,
+                    viewdirs=rays_d_flatten,
+                    light_positions=light_positions_flatten,
+                    **comp_geo_out,
+                    **kwargs,
+                )
+
+            if isinstance(material_eval, dict):
+                comp_rgb_fg = material_eval["color"] * opacity
+                comp_material_out = {
+                    f"comp_{k}": v * opacity
+                    for k, v in material_eval.items()
+                    if k != "color"
+                }
+            else:
+                comp_rgb_fg = material_eval * opacity
+                comp_material_out = {}
 
         # populate depth and opacity to each point
-        t_depth = depth[ray_indices]
-        z_variance = nerfacc.accumulate_along_rays(
-            weights[..., 0],
-            values=(t_positions - t_depth) ** 2,
+        weights_normalized = weights / opacity.clamp(min=1e-5)[ray_indices]  # num_pts
+        # z-variance loss from HiFA: https://hifa-team.github.io/HiFA-site/
+        z_mean: Float[Tensor, "Nr 1"] = nerfacc.accumulate_along_rays(
+            weights_normalized[..., 0],
+            values=t_positions,
             ray_indices=ray_indices,
             n_rays=n_rays,
         )
+        z_variance_unmasked = nerfacc.accumulate_along_rays(
+            weights_normalized[..., 0],
+            values=(t_positions - z_mean[ray_indices]) ** 2,
+            ray_indices=ray_indices,
+            n_rays=n_rays,
+        )
+        z_variance = z_variance_unmasked * (opacity > 0.5).float()
 
         if bg_color is None:
             bg_color = comp_rgb_bg
@@ -386,6 +476,10 @@ class NeRFVolumeRenderer(VolumeRenderer):
             "opacity": opacity.view(batch_size, height, width, 1),
             "depth": depth.view(batch_size, height, width, 1),
             "z_variance": z_variance.view(batch_size, height, width, 1),
+            **{
+                k: v.view(batch_size, height, width, -1)
+                for k, v in comp_material_out.items()
+            },
         }
 
         if self.training:

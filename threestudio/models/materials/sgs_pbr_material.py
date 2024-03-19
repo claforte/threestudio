@@ -107,7 +107,6 @@ class SGsPBRMaterial(BaseMaterial):
         viewdirs: Float[Tensor, "*B 3"],
         shading_normal: Float[Tensor, "B ... 3"],
         illumination_idx: Optional[int] = None,
-        ambient_occlusion: Float[Tensor, "B ... 1"] = None,
         **kwargs,
     ) -> Dict[str, Tensor]:
         albedo = get_activation(self.cfg.activation)(features[..., :3])
@@ -142,7 +141,6 @@ class SGsPBRMaterial(BaseMaterial):
             diffuse,
             specular,
             roughness,
-            ambient_occlusion,
         )
 
         material_eval["albedo"] = albedo
@@ -209,7 +207,6 @@ class SGsPBRMaterial(BaseMaterial):
         diffuse: Float[Tensor, "*B 3"],
         specular: Optional[Float[Tensor, "*B 3"]] = None,
         roughness: Optional[Float[Tensor, "*B 1"]] = None,
-        ambient_occlusion: Float[Tensor, "*B 1"] = None,
     ) -> Dict[str, Float[Tensor, "*B 3"]]:
         diffuse_eval = self._evaluate_diffuse(sg_illuminations, diffuse, shading_normal)
         total_shaded = diffuse_eval["diffuse_shaded"]
@@ -236,9 +233,6 @@ class SGsPBRMaterial(BaseMaterial):
 
         base["color"] = total_shaded
         base["illumination"] = total_illumination
-        if ambient_occlusion is not None:
-            base["color"] = base["color"] * ambient_occlusion
-            base["illumination"] = base["illumination"] * ambient_occlusion
 
         return base
 
